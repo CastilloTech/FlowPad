@@ -313,7 +313,9 @@ mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px;
 .ur .icon-btn:disabled { opacity: 0.3; cursor: default; background: none; }
 .stat { font: 500 12px var(--mono); color: var(--muted); letter-spacing: 0.02em; }
 .blk { position: relative; border-radius: 14px; transition: box-shadow 0.12s; }
-.blk.bar { background: var(--surface); padding: 4px 10px 10px; margin: 0 0 8px; }
+.blk.bar { background: var(--surface); padding: 4px 10px 10px; margin: 0 0 8px; content-visibility: auto; contain-intrinsic-size: auto 260px; } /* off-screen bars skip layout and paint */
+.bh .pat-i { width: 30px; height: 30px; color: var(--faint); }
+.bh .pat-i .i { width: 16px; height: 16px; }
 .blk.bar.cur { box-shadow: inset 0 0 0 1px var(--surface-3); }
 .blk.bar.now { box-shadow: inset 0 0 0 1.5px var(--accent); }
 .blk.blank { height: 8px; }
@@ -333,7 +335,10 @@ mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px;
 .w[data-r="3"] { text-decoration-color: var(--r3); } .w[data-r="4"] { text-decoration-color: var(--r4); } .w[data-r="5"] { text-decoration-color: var(--r5); }
 .blk .bgrid { margin-top: 6px; }
 /* rhyme chains: multi-syllable vowel runs that repeat in a section */
-.bline .mc { border-radius: 4px; background: color-mix(in srgb, var(--c) 24%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 24%, transparent); }
+.bline .mc { background: color-mix(in srgb, var(--c) 26%, transparent); padding: 2px 0; }
+.bline .w > .mc:first-child { border-radius: 5px 0 0 5px; padding-left: 2px; margin-left: -2px; }
+.bline .w > .mc:last-child { border-radius: 0 5px 5px 0; padding-right: 2px; margin-right: -2px; }
+.bline .w > .mc:only-child { border-radius: 5px; }
 .mc[data-c="0"] { --c: var(--r2); } .mc[data-c="1"] { --c: var(--r4); } .mc[data-c="2"] { --c: var(--r3); }
 .mc[data-c="3"] { --c: var(--r0); } .mc[data-c="4"] { --c: var(--r5); } .mc[data-c="5"] { --c: var(--r1); }
 .lg.mcl { width: 12px; height: 9px; border-radius: 3px; background: color-mix(in srgb, var(--r2) 40%, transparent); margin-left: 0; }
@@ -364,6 +369,18 @@ mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px;
 .sheet-add .btn { flex: 1; height: 42px; font-size: 14px; }
 .ws .hint { margin: 10px 4px 16px; text-align: left; }
 .ws .hint b { color: var(--text); font-weight: 650; }
+.tips { margin: 14px 0 0; border-radius: 14px; background: var(--surface); padding: 0 14px; }
+.tips summary {
+  display: flex; align-items: center; min-height: 46px; cursor: pointer; list-style: none;
+  font-size: 13px; font-weight: 650; color: var(--muted); letter-spacing: 0.02em;
+}
+.tips summary::-webkit-details-marker { display: none; }
+.tips summary::after { content: ""; margin-left: auto; width: 8px; height: 8px; border: solid currentColor; border-width: 0 2px 2px 0; transform: rotate(45deg) translate(-2px, -2px); transition: transform 0.15s; }
+.tips[open] summary::after { transform: rotate(-135deg) translate(-2px, -2px); }
+.tip-list { margin: 0 0 12px; padding-left: 18px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.tip-list li + li { margin-top: 4px; }
+.tip-list b { color: var(--text); font-weight: 650; }
+.tips .legend { padding-bottom: 14px; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); margin: 0; }
 .legend b { font-weight: 700; color: var(--accent); }
 .lg { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin: 0 3px 0 6px; vertical-align: 1px; }
@@ -488,8 +505,8 @@ mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px;
 
 /* ---------- touch: bigger hit areas for the small controls ---------- */
 @media (pointer: coarse) {
-  .bh .pat-btn, .bh .bm, .chip-x .x { position: relative; }
-  .bh .pat-btn::after, .bh .bm::after, .chip-x .x::after { content: ""; position: absolute; inset: -9px -4px; }
+  .bh .pat-btn, .bh .pat-i, .bh .bm, .chip-x .x { position: relative; }
+  .bh .pat-btn::after, .bh .pat-i::after, .bh .bm::after, .chip-x .x::after { content: ""; position: absolute; inset: -9px -4px; }
   .pat-btn { height: 32px; }
   .seg button { height: 36px; }
   .st { height: 36px; }

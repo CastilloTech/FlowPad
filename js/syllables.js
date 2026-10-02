@@ -325,6 +325,7 @@
     clearTimeout(notifyTimer);
     notifyTimer = setTimeout(() => {
       infoCache.clear();
+      keyCache.clear();
       try { localStorage.setItem(LEX_KEY, JSON.stringify(lex)); } catch (e) { /* storage full */ }
       window.dispatchEvent(new Event('fp:lexicon'));
     }, 300);
@@ -412,7 +413,7 @@
           keep.push(win);
           end = i + L;
         }
-        if (keep.length < 2) return;
+        if (keep.length < 2 || new Set(keep.map((win) => win[0].li)).size < 2) return; // a chain runs across lines
         keep.forEach((win) => win.forEach((x) => { taken.add(x); out[x.li][x.i] = id; }));
         id++;
       });
@@ -455,7 +456,14 @@
     return m ? s.slice(m.index) : s;
   }
 
+  const keyCache = new Map();
+  /** Rhyme key of a word (cached; cleared when new pronunciations arrive). */
   function rhymeKey(word) {
+    let k = keyCache.get(word);
+    if (k === undefined) { if (keyCache.size > 5000) keyCache.clear(); keyCache.set(word, (k = rhymeKey0(word))); }
+    return k;
+  }
+  function rhymeKey0(word) {
     const w = clean(word).replace(/'/g, '');
     if (!w) return '';
     const ph = lex[w];
@@ -494,7 +502,7 @@
     vowelKey,
     heurCount,
     setCorpus(fn) { corpus = fn; },
-    clearLexicon() { lex = {}; infoCache.clear(); try { localStorage.removeItem(LEX_KEY); } catch (e) { /* ignore */ } },
+    clearLexicon() { lex = {}; infoCache.clear(); keyCache.clear(); try { localStorage.removeItem(LEX_KEY); } catch (e) { /* ignore */ } },
     lexiconSize: () => Object.keys(lex).length,
   };
   FP.syl = api;

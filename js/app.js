@@ -114,8 +114,19 @@
   const SH = FP.sheet;
   const { newBarRow, sylPieces, stepText, spreadCells, wordSteps } = SH;
 
-  /** Read a bar's steps back into a lyric line, plus the stress class of every step. */
+  /** Read a bar's steps back into a lyric line, plus the stress class of every step (cached per bar content). */
+  const views0 = new Map();
+  window.addEventListener('fp:lexicon', () => views0.clear()); // new pronunciations change stresses
   function barView(cells) {
+    const key = cells.join('\u0001');
+    let v = views0.get(key);
+    if (!v) {
+      if (views0.size > 3000) views0.clear();
+      views0.set(key, (v = barView0(cells)));
+    }
+    return v;
+  }
+  function barView0(cells) {
     const wordsIn = [];
     let cur = null;
     cells.forEach((raw, k) => {
@@ -742,8 +753,14 @@
         <span class="cmeasure" id="cmeasure" aria-hidden="true"></span>
       </div>
       <div class="sheet-add"><button class="btn" data-a="add-bar">${icon('plus', 'sm')}Bar</button><button class="btn" data-a="add-sec">${icon('plus', 'sm')}Section</button></div>
-      <p class="hint">Tap a step and type. <b>Space</b> moves to the next step, leave steps empty for rests, end a syllable with <b>-</b> to carry the word on (ci- ty), <b>Enter</b> starts the next bar. <b>Hold a step</b> to drag it — drop it on words to replace them or shift them along — or let go in place to insert or delete a step.</p>
-      <div class="legend"><span><b>CAPS</b> = stressed</span><span>Grey = unstressed</span><span>Underline = rhyme family</span><span><i class="lg mcl"></i>Shade = rhyme chain <button class="link" data-a="chains" id="chainsb">${S.settings.chains === false ? 'off' : 'on'}</button></span><span><i class="lg k"></i>kick <i class="lg s"></i>snare <i class="lg h"></i>hat</span></div>
+      <details class="tips" id="tips"${S.settings.tipsClosed ? '' : ' open'}><summary>Tips &amp; legend</summary>
+        <ul class="tip-list">
+          <li><b>Tap a step</b> and type. <b>Space</b> moves on — longer words split into syllables by themselves.</li>
+          <li>Leave steps empty for rests. End a syllable with <b>-</b> to carry a word on (ci- ty).</li>
+          <li><b>Enter</b> starts the next bar. <b>Hold a step</b> to drag it, or let go in place to insert or delete a step.</li>
+        </ul>
+        <div class="legend"><span><b>CAPS</b> = stressed</span><span>Grey = unstressed</span><span>Underline = rhyme family</span><span><i class="lg mcl"></i>Shade = rhyme chain <button class="link" data-a="chains" id="chainsb">${S.settings.chains === false ? 'off' : 'on'}</button></span><span><i class="lg k"></i>kick <i class="lg s"></i>snare <i class="lg h"></i>hat</span></div>
+      </details>
     </div>`;
     dock.hidden = false;
     dock.innerHTML = `<div class="panel" id="panel" hidden></div>
@@ -755,6 +772,7 @@
       </div>`;
 
     const box = $('#lines'), gs = $('#gsheet'), inp = $('#cin'), meas = $('#cmeasure'), panel = $('#panel'), stripEl = $('#strip');
+    $('#tips').addEventListener('toggle', (e) => { S.settings.tipsClosed = !e.target.open; saveSettings(); });
     const rows = f.sheet;
     if (!rows.length) rows.push(newBarRow());
     let cur = S.cell[f.id] && rows[S.cell[f.id].r] && rows[S.cell[f.id].r].type === 'bar' ? { ...S.cell[f.id] } : null;
@@ -818,43 +836,100 @@
     }
     VA.chains = () => { S.settings.chains = S.settings.chains === false; saveSettings(); paintAll(); $('#chainsb').textContent = S.settings.chains === false ? 'off' : 'on'; };
 
+    /** One row's HTML — content only; the cursor and playhead are applied on top (applyState). */
+    function rowHTML(row, i, n, v, color, mk) {
+      if (row.type === 'blank') return `<div class="blk blank" data-r="${i}"></div>`;
+      if (row.type === 'label') return `<button class="blk label" data-a="label" data-r="${i}">${esc(row.text)}</button>`;
+      const beatOff = f.track && !f.track.drums; // an imported beat replaces the drum patterns
+      const steps = beatOff ? null : barSteps(f, i);
+      const has = (k, ...ts) => steps && ts.some((t) => steps[t] && steps[t][k]);
+      const cnt = syl.lineCount(v.text);
+      // a bar shows its pattern only when it has its own; otherwise a quiet drum button opens the choice
+      const pat = beatOff ? '' : row.pat
+        ? `<button class="pat-btn set" data-a="bar-pat" data-r="${i}" data-n="${n}">${esc(patName(row.pat))}</button>`
+        : `<button class="icon-btn pat-i" data-a="bar-pat" data-r="${i}" data-n="${n}" aria-label="Beat for bar ${n}: ${esc(patName(f.beat.def))}" title="Beat: ${esc(patName(f.beat.def))}">${icon('drum', 'sm')}</button>`;
+      return `<div class="blk bar" data-r="${i}">
+          <div class="bh"><span class="bar-n">${n}</span>${pat}<span class="grow"></span><span class="cnt">${cnt} syl</span><button class="icon-btn bm" data-a="bar-menu" data-r="${i}" data-n="${n}" aria-label="Bar ${n} options">${icon('more')}</button></div>
+          <div class="bline" data-a="bar-go" data-r="${i}">${v.text ? lineHTML(v.text, color, mk) : '<span class="ph-t2">Tap a step to write</span>'}</div>
+          <div class="bgrid">${range(16).map((k) => {
+            const raw = (row.cells[k] || '').trim();
+            const cont = /\S-$/.test(raw);
+            return `<div class="cell ${k % 4 === 0 ? 'b' : ''}" data-a="cell" data-r="${i}" data-k="${k}"><span class="dr">${has(k, 'kick') ? '<i class="k"></i>' : ''}${has(k, 'snare', 'clap') ? '<i class="s"></i>' : ''}${has(k, 'hat', 'open') ? '<i class="h"></i>' : ''}</span><span class="ct ${v.cls[k]}">${esc(cont ? raw.slice(0, -1) : raw)}${cont ? '<i class="hy">-</i>' : ''}</span></div>`;
+          }).join('')}</div>
+        </div>`;
+    }
+
+    /**
+     * Paint the sheet. Each row's HTML is compared with what's on screen and only changed rows
+     * are replaced, so typing in one step of a long song touches one bar, not all of them.
+     */
+    let shown = [];
     function paintAll() {
       const views = rows.map((r) => (r.type === 'bar' ? barView(r.cells) : null));
       const color = rhymeColors(f.text.split('\n'));
       const marks = chainMarks(views);
       let n = 0, total = 0;
-      box.innerHTML = rows.map((row, i) => {
-        if (row.type === 'blank') return `<div class="blk blank" data-r="${i}"></div>`;
-        if (row.type === 'label') return `<button class="blk label" data-a="label" data-r="${i}">${esc(row.text)}</button>`;
-        n++;
-        const v = views[i], steps = f.track && !f.track.drums ? null : barSteps(f, i); // no drum dots under an imported beat
-        const has = (k, ...ts) => steps && ts.some((t) => steps[t] && steps[t][k]);
-        const cnt = syl.lineCount(v.text);
-        total += cnt;
-        return `<div class="blk bar${i === nowLine ? ' now' : ''}${cur && cur.r === i ? ' cur' : ''}" data-r="${i}">
-          <div class="bh"><span class="bar-n">${n}</span><button class="pat-btn ${row.pat ? 'set' : ''}" data-a="bar-pat" data-r="${i}" data-n="${n}">${esc(row.pat ? patName(row.pat) : patName(f.beat.def))}</button><span class="grow"></span><span class="cnt">${cnt} syl</span><button class="icon-btn bm" data-a="bar-menu" data-r="${i}" data-n="${n}" aria-label="Bar ${n} options">${icon('more')}</button></div>
-          <div class="bline" data-a="bar-go" data-r="${i}">${v.text ? lineHTML(v.text, color, marks.get(i)) : '<span class="ph-t2">Tap a step to write</span>'}</div>
-          <div class="bgrid">${range(16).map((k) => {
-            const raw = (row.cells[k] || '').trim();
-            const cont = /\S-$/.test(raw);
-            return `<div class="cell ${k % 4 === 0 ? 'b' : ''}${cur && cur.r === i && cur.k === k ? ' act' : ''}${i === nowLine && k === nowStep ? ' now' : ''}" data-a="cell" data-r="${i}" data-k="${k}"><span class="dr">${has(k, 'kick') ? '<i class="k"></i>' : ''}${has(k, 'snare', 'clap') ? '<i class="s"></i>' : ''}${has(k, 'hat', 'open') ? '<i class="h"></i>' : ''}</span><span class="ct ${v.cls[k]}">${esc(cont ? raw.slice(0, -1) : raw)}${cont ? '<i class="hy">-</i>' : ''}</span></div>`;
-          }).join('')}</div>
-        </div>`;
-      }).join('');
-      $('#stat').textContent = n ? `${plural(n, 'bar')} · ${total} syl · avg ${Math.round(total / n)}` : 'Add a bar to start';
-      nowCell = null;
-      fitSteps();
+      const html = rows.map((row, i) => {
+        if (row.type === 'bar') { n++; total += syl.lineCount(views[i].text); }
+        return rowHTML(row, i, n, views[i], color, marks.get(i));
+      });
+      const kids = box.children, changed = [];
+      if (kids.length !== html.length) {
+        box.innerHTML = html.join('');
+        changed.push(...kids);
+      } else {
+        const t = document.createElement('template');
+        html.forEach((h, i) => {
+          if (h === shown[i]) return;
+          t.innerHTML = h;
+          const el = t.content.firstElementChild;
+          box.replaceChild(el, kids[i]);
+          changed.push(el);
+        });
+      }
+      shown = html;
+      changed.forEach((el) => { if (el.classList.contains('bar')) fitIO.observe(el); });
+      fitSteps(changed.filter((el) => el.classList.contains('bar') && near(el)));
+      applyState();
+      $('#stat').textContent = n ? `${plural(n, 'bar')} · avg ${Math.round(total / n)} syl` : 'Add a bar to start';
       placeInput();
     }
+    /** Cursor, active step and playhead — kept out of the row HTML so moving them never repaints. */
+    function applyState() {
+      $$('.blk.cur, .blk.now, .cell.act, .cell.now', box).forEach((e) => e.classList.remove('cur', 'now', 'act'));
+      nowCell = null;
+      if (cur) {
+        const b = blkEl(cur.r);
+        if (b) { b.classList.add('cur'); const c = b.querySelectorAll('.cell')[cur.k]; if (c) c.classList.add('act'); }
+      }
+      const pb = nowLine >= 0 && blkEl(nowLine);
+      if (pb) {
+        pb.classList.add('now');
+        const c = nowStep >= 0 && pb.querySelectorAll('.cell')[nowStep];
+        if (c) { c.classList.add('now'); nowCell = c; }
+      }
+    }
 
-    /** Shrink step text that doesn't fit its cell (CAPS syllables on narrow phones). Reads first, then writes. */
-    function fitSteps() {
-      const cts = $$('.ct', box).filter((c) => c.textContent);
+    /**
+     * Shrink step text that doesn't fit its cell (CAPS syllables on narrow phones). Bars are fitted
+     * when they change or scroll into view, not all at once. Reads first, then writes.
+     */
+    const near = (el) => { const r = el.getBoundingClientRect(); return r.bottom > -400 && r.top < innerHeight + 400; };
+    function fitSteps(bars) {
+      const cts = bars.flatMap((b) => { b.dataset.fit = '1'; return $$('.ct', b).filter((c) => c.textContent); });
+      if (!cts.length) return;
       cts.forEach((c) => { c.style.fontSize = ''; });
-      const base = cts.length ? parseFloat(getComputedStyle(cts[0]).fontSize) : 12;
+      const base = parseFloat(getComputedStyle(cts[0]).fontSize) || 12;
       cts.map((c) => [c, c.clientWidth / c.scrollWidth])
         .filter(([, r]) => r < 1)
         .forEach(([c, r]) => { c.style.fontSize = `${Math.max(8, Math.floor(base * r * 10) / 10)}px`; });
+    }
+    const fitIO = new IntersectionObserver((es) => {
+      fitSteps(es.filter((e) => e.isIntersecting && e.target.dataset.fit !== '1' && e.target.isConnected).map((e) => e.target));
+    }, { rootMargin: '400px 0px' });
+    /** The sheet got wider or narrower: every bar fits again as it comes into view. */
+    function refitAll() {
+      $$('.blk.bar', box).forEach((b) => { b.dataset.fit = ''; fitIO.unobserve(b); fitIO.observe(b); });
     }
     /** Every change to the sheet goes through here. kind 'type' = typing, which undoes in bursts. */
     const commit = (kind) => { sync(); record(kind); paintAll(); queueStrip(); };
@@ -1204,7 +1279,7 @@
     };
 
     let lastW = 0;
-    const ro = new ResizeObserver(() => { const w = box.clientWidth; if (w !== lastW) { lastW = w; fitSteps(); placeInput(); } });
+    const ro = new ResizeObserver(() => { const w = box.clientWidth; if (w !== lastW) { lastW = w; refitAll(); placeInput(); } });
     ro.observe(box);
 
     /** Drop a word from the strip, rhymes or bank onto the active step, then move on. */
@@ -2079,6 +2154,7 @@
     window.addEventListener('resize', onResize);
     onLeave(() => {
       gone = true;
+      fitIO.disconnect();
       dragEnd(false);
       document.removeEventListener('keydown', onUndoKey);
       document.removeEventListener('pointermove', onDragMove);
