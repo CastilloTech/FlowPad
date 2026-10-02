@@ -3,8 +3,8 @@
   'use strict';
   const FP = (window.FP = window.FP || {});
   const NAME = 'flowpad';
-  const VERSION = 1;
-  const STORES = ['projects', 'folders', 'files', 'patterns', 'recordings', 'kv'];
+  const VERSION = 2; // 2: beats (imported audio loops)
+  const STORES = ['projects', 'folders', 'files', 'patterns', 'recordings', 'kv', 'beats'];
   let opening = null;
 
   function open() {

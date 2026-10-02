@@ -241,6 +241,40 @@
   let notifyTimer = null;
   let corpus = () => '';
 
+  /** Vowel sounds of a dictionary word, one per syllable (ARPAbet: "EH", "AY" …). */
+  function lexVowels(w) {
+    const ph = lex[w];
+    return ph ? ph.split(' ').filter((p) => /\d$/.test(p)).map((p) => p.replace(/\d$/, '')) : null;
+  }
+
+  // common one-syllable words spelled unlike they sound
+  const VOWEL_EXC = {
+    one: 'AH', two: 'UW', to: 'UW', too: 'UW', do: 'UW', you: 'UW', who: 'UW', through: 'UW', though: 'OW',
+    word: 'ER', world: 'ER', work: 'ER', worth: 'ER', were: 'ER', are: 'AA', the: 'AH', a: 'AH', of: 'AH',
+    love: 'AH', come: 'AH', some: 'AH', done: 'AH', none: 'AH', from: 'AH', what: 'AH', was: 'AH', does: 'AH',
+    gone: 'AO', have: 'AE', give: 'IH', live: 'IH', where: 'EH', there: 'EH', their: 'EH', said: 'EH',
+    here: 'IY', i: 'AY', eye: 'AY', my: 'AY', by: 'AY', why: 'AY', both: 'OW', most: 'OW', ghost: 'OW', put: 'UH', could: 'UH', would: 'UH', should: 'UH',
+  };
+
+  /** Best guess at a syllable's vowel sound from its spelling, in the same ARPAbet terms. */
+  function guessVowel(piece, last, only) {
+    const p = piece.toLowerCase().replace(/[^a-z]/g, '');
+    if (only && VOWEL_EXC[p]) return VOWEL_EXC[p];
+    if (last && /^(to|do)$/.test(p)) return 'UW'; // in-to, on-to, un-do
+    if (last && !only && /ery$/.test(p)) return 'IY'; // ev-ery
+    const rules = [
+      [/igh/, 'AY'], [/(oo|ew|ue|ui)/, 'UW'], [/ow$/, only && OW_SHORT.has(p) ? 'AW' : 'OW'], [/(ou|ow)/, 'AW'], [/(oi|oy)/, 'OY'],
+      [/(ee|ea|ie(?!s?$))/, 'IY'], [/ey$/, only ? 'EY' : 'IY'], [/(ai|ay|ei)/, 'EY'], [/(oa|oe)/, 'OW'], [/(au|aw)/, 'AO'],
+      [/^[^aeiou]*o$/, 'OW'], [/are$/, 'EH'], [/ar/, 'AA'], [/(er|ir|ur)/, 'ER'], [/or/, last && !only ? 'ER' : 'AO'], [/ies?$/, 'AY'],
+    ];
+    for (const [re, v] of rules) if (re.test(p)) return v;
+    const magic = p.match(/([aeiou])[^aeiouy]es?$/); // silent-e: make, time, home, cute, bites
+    if (magic) return { a: 'EY', i: 'AY', o: 'OW', u: 'UW', e: 'IY' }[magic[1]];
+    if (/y$/.test(p) && !/[aeiou]/.test(p.slice(0, -1))) return only ? 'AY' : 'IY'; // my, fly · ci-ty
+    const m = p.match(/[aeiouy]/);
+    return m ? { a: 'AE', e: 'EH', i: 'IH', o: 'AA', u: 'AH', y: 'IH' }[m[0]] : '';
+  }
+
   function lexStress(w) {
     const ph = lex[w];
     if (!ph) return null;
@@ -315,7 +349,8 @@
         if (!stress) { want(w); stress = heurStress(w, n); }
         if (n === 1 && FUNC.has(w.replace(/'/g, ''))) stress = [0];
         const pieces = splitWord(raw, n); // keep the original characters so overlays line up
-        info = { n, syls: pieces.map((t, i) => ({ t, s: stress[i] || 0 })) };
+        const vs = lexVowels(w) || lexVowels(w.replace(/'/g, ''));
+        info = { n, syls: pieces.map((t, i) => ({ t, s: stress[i] || 0, v: vs && vs.length === n ? vs[i] : guessVowel(t, i === n - 1, n === 1) })) };
       }
     }
     infoCache.set(raw, info);
@@ -337,6 +372,52 @@
     }
     if (last < line.length) tokens.push({ text: line.slice(last) });
     return { tokens, count };
+  }
+
+  /**
+   * Multi-syllable rhyme chains across a block of lines ("pen tight" / "then fight",
+   * "city" / "pretty"): runs of 3 or 2 syllables inside a line, starting on a stressed
+   * syllable, whose vowel sounds repeat elsewhere in the block with different words.
+   * Returns, per line, a chain number (or -1) for each syllable of its words (numbers skipped).
+   */
+  function chains(lines) {
+    const flat = [], out = [];
+    lines.forEach((l, li) => {
+      const row = [];
+      analyzeLine(l).tokens.forEach((tok) => {
+        if (!tok.word || (tok.syls[0] && tok.syls[0].num)) return;
+        const fn = tok.n === 1 && FUNC.has(clean(tok.text).replace(/'/g, ''));
+        tok.syls.forEach((x) => { row.push(-1); flat.push({ li, i: row.length - 1, v: x.v, s: x.s, t: clean(x.t), fn }); });
+      });
+      out.push(row);
+    });
+    const taken = new Set();
+    let id = 0;
+    for (const L of [3, 2]) {
+      const groups = new Map();
+      for (let i = 0; i + L <= flat.length; i++) {
+        const win = flat.slice(i, i + L);
+        if (win[0].s !== 1 || win.some((x) => !x.v || x.fn || x.li !== win[0].li || taken.has(x))) continue;
+        const key = win.map((x) => x.v).join(' ');
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(i);
+      }
+      groups.forEach((starts) => {
+        const keep = [], texts = new Set();
+        let end = -1;
+        for (const i of starts) {
+          const win = flat.slice(i, i + L), txt = win.map((x) => x.t).join(' ');
+          if (i < end || texts.has(txt) || win.some((x) => taken.has(x))) continue; // overlapping, or the same words again
+          texts.add(txt);
+          keep.push(win);
+          end = i + L;
+        }
+        if (keep.length < 2) return;
+        keep.forEach((win) => win.forEach((x) => { taken.add(x); out[x.li][x.i] = id; }));
+        id++;
+      });
+    }
+    return out;
   }
 
   const lineCount = (line) => analyzeLine(line).count;
@@ -408,6 +489,7 @@
     lineCount,
     analyzeLine,
     wordInfo,
+    chains,
     rhymeKey,
     vowelKey,
     heurCount,

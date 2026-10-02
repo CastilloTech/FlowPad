@@ -139,6 +139,14 @@ button { background: none; border: 0; padding: 0; cursor: pointer; touch-action:
 .row .icon-btn { color: var(--muted); }
 mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px; padding: 0 1px; }
 
+.notice {
+  display: flex; align-items: center; gap: 10px; margin: 0 0 14px; padding: 12px 6px 12px 14px;
+  border-radius: 14px; background: var(--accent-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.notice > .i { color: var(--accent); }
+.notice b { display: block; font-size: 15px; }
+.notice span { display: block; font-size: 13px; color: var(--muted); }
+.notice .btn { height: 38px; padding: 0 14px; font-size: 14px; }
 .empty { text-align: center; padding: 48px 24px; color: var(--muted); }
 .empty .i { width: 34px; height: 34px; color: var(--faint); margin-bottom: 10px; stroke-width: 1.4; }
 .empty h3 { margin: 0 0 4px; color: var(--text); font-size: 17px; font-weight: 650; }
@@ -298,7 +306,11 @@ mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px;
 
 /* ---------- the flow sheet: each line is a bar written on its grid ---------- */
 .page.ws { padding-bottom: calc(var(--dock-h, 140px) + 16px); }
-.write-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 2px 0 10px; }
+.write-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 2px 0 10px; }
+.write-meta .stat { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ur { display: flex; flex: none; }
+.ur .icon-btn { width: 40px; height: 40px; }
+.ur .icon-btn:disabled { opacity: 0.3; cursor: default; background: none; }
 .stat { font: 500 12px var(--mono); color: var(--muted); letter-spacing: 0.02em; }
 .blk { position: relative; border-radius: 14px; transition: box-shadow 0.12s; }
 .blk.bar { background: var(--surface); padding: 4px 10px 10px; margin: 0 0 8px; }
@@ -320,6 +332,12 @@ mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px;
 .w[data-r="0"] { text-decoration-color: var(--r0); } .w[data-r="1"] { text-decoration-color: var(--r1); } .w[data-r="2"] { text-decoration-color: var(--r2); }
 .w[data-r="3"] { text-decoration-color: var(--r3); } .w[data-r="4"] { text-decoration-color: var(--r4); } .w[data-r="5"] { text-decoration-color: var(--r5); }
 .blk .bgrid { margin-top: 6px; }
+/* rhyme chains: multi-syllable vowel runs that repeat in a section */
+.bline .mc { border-radius: 4px; background: color-mix(in srgb, var(--c) 24%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 24%, transparent); }
+.mc[data-c="0"] { --c: var(--r2); } .mc[data-c="1"] { --c: var(--r4); } .mc[data-c="2"] { --c: var(--r3); }
+.mc[data-c="3"] { --c: var(--r0); } .mc[data-c="4"] { --c: var(--r5); } .mc[data-c="5"] { --c: var(--r1); }
+.lg.mcl { width: 12px; height: 9px; border-radius: 3px; background: color-mix(in srgb, var(--r2) 40%, transparent); margin-left: 0; }
+.legend .link { font-size: 12px; }
 .gsheet { position: relative; }
 .cell { cursor: text; }
 .cell.act { box-shadow: inset 0 0 0 2px var(--accent); }
@@ -420,6 +438,34 @@ mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px;
 .bpm-v span { font-size: 11px; color: var(--muted); font-weight: 650; letter-spacing: 0.08em; }
 .ctl { margin-top: 10px; }
 
+/* ---------- imported beat ---------- */
+.trackbox { display: flex; align-items: center; gap: 10px; margin: 2px 0 14px; padding: 10px 4px 10px 12px; border-radius: 14px; background: var(--surface-2); }
+.trackbox > .i { color: var(--accent); }
+.trackbox b { display: block; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trackbox .tsub { display: block; font-size: 12px; color: var(--muted); }
+.panel > .btn.block { margin: 2px 0 14px; }
+/* the beat's structure: one segment per section, sized by its bars */
+.struct { display: flex; gap: 3px; margin: -4px 0 8px; }
+.sseg {
+  min-width: 46px; height: 44px; padding: 0 6px; border-radius: 9px; display: flex; flex-direction: column; justify-content: center; align-items: flex-start;
+  background: var(--surface-3); color: var(--text); overflow: hidden; transition: box-shadow 0.12s;
+}
+.sseg b { font-size: 12px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.sseg span { font: 600 10px var(--mono); color: var(--muted); }
+.sseg[data-kind="hook"] { background: var(--accent-soft); color: var(--accent); }
+.sseg[data-kind="edge"] { background: var(--surface-2); color: var(--muted); }
+.sseg[data-kind="bridge"] { background: color-mix(in srgb, var(--r3) 18%, transparent); }
+.sseg.on { box-shadow: inset 0 0 0 2px var(--accent); }
+.struct-act { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+.sed-row { display: flex; gap: 8px; align-items: center; margin: 0 0 8px; }
+.sed-row .field:first-child { flex: 1; min-width: 0; }
+.sed-row .field.num { width: 76px; text-align: center; }
+#sedl .btn.block { margin: 4px 0 6px; }
+#sedl #ssavelay { margin-top: 10px; }
+.beatform .field.num { width: 92px; text-align: center; }
+.beatform .mrow { display: flex; gap: 8px; flex: none; }
+.beatform .mrow > * { flex: none; }
+
 /* ---------- takes ---------- */
 .take { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .take:last-child { border-bottom: 0; }
@@ -471,6 +517,19 @@ mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px;
 @media (hover: hover) {
   .row:hover .row-t { color: var(--accent); }
   .icon-btn:hover { background: var(--surface-2); }
+}
+/* ---------- printed lyric sheet ---------- */
+#print { display: none; }
+@media print {
+  body > *:not(#print) { display: none !important; }
+  body { background: #fff; color: #000; }
+  #print { display: block; font: 13pt/1.6 Georgia, "Times New Roman", serif; color: #000; }
+  #print h1 { font: 700 22pt/1.2 var(--font); margin: 0 0 4pt; }
+  #print .pmeta { font: 10pt var(--font); color: #555; margin: 0 0 18pt; }
+  #print h2 { font: 700 10pt var(--font); letter-spacing: 0.08em; text-transform: uppercase; color: #333; margin: 16pt 0 4pt; break-after: avoid; }
+  #print p { margin: 0; break-inside: avoid; }
+  #print .pgap { height: 10pt; }
+  #print .pfoot { margin-top: 24pt; font: 9pt var(--font); color: #888; }
 }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }

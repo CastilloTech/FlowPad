@@ -2,8 +2,9 @@
   "name": "flowpad",
   "version": "1.0.0",
   "private": true,
-  "description": "FlowPad — a minimalist, mobile-first rap writing app (PWA, no dependencies).",
+  "description": "LosSoulx FlowPad — a minimalist, mobile-first rap writing app (PWA, no dependencies).",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test \"tests/*.test.cjs\""
   }
 }

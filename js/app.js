@@ -110,11 +110,9 @@
   }
   const barLines = (f) => (f.sheet ? f.sheet.map((r, i) => (r.type === 'bar' ? i : -1)) : f.text.split('\n').map((l, i) => (isBar(l) ? i : -1))).filter((i) => i >= 0);
 
-  // ---------- flow sheet model ----------
-  // A song is a list of rows: { type: 'bar', cells: [16 step strings], pat } |
-  // { type: 'label', text } | { type: 'blank' }. A step holds what lands on it;
-  // a trailing "-" means the word carries on into the next filled step ("ci-", "ty").
-  const newBarRow = () => ({ type: 'bar', cells: new Array(16).fill(''), pat: null });
+  // ---------- flow sheet model (js/sheet.js) ----------
+  const SH = FP.sheet;
+  const { newBarRow, sylPieces, stepText, spreadCells, wordSteps } = SH;
 
   /** Read a bar's steps back into a lyric line, plus the stress class of every step. */
   function barView(cells) {
@@ -149,54 +147,6 @@
     }).join(' ');
     marks.forEach((m, k) => { cls[k] = m.has(1) ? 's1' : m.has(2) ? 's2' : m.size ? 's0' : ''; });
     return { text, cls };
-  }
-
-  /** Lay a lyric line across 16 steps: 'even' spreads it over the bar, 'pack' puts one syllable per step. */
-  function spreadCells(text, mode = 'even') {
-    const flat = sylPieces(text);
-    const cells = range(16).map(() => []);
-    flat.forEach((s, j) => cells[mode === 'pack' ? Math.min(15, j) : Math.min(15, Math.floor((j * 16) / flat.length))].push(s));
-    return cells.map(stepText);
-  }
-
-  /** Syllables sharing one step → its text ("syl la-" joins to "sylla-", words keep their spaces). */
-  function stepText(L) {
-    if (!L.length) return '';
-    let out = '';
-    L.forEach((s, i) => { out += s.t; if (i < L.length - 1 && s.end) out += ' '; });
-    return L[L.length - 1].end ? out : `${out}-`;
-  }
-
-  /** A line as its syllables in order: { t, end } where `end` marks the last syllable of a word. */
-  function sylPieces(text) {
-    const flat = [];
-    let lead = '';
-    const toks = syl.analyzeLine(text).tokens;
-    toks.forEach((t) => {
-      if (t.word) {
-        const pieces = t.syls[0] && t.syls[0].num ? [t.text] : t.syls.map((s) => s.t);
-        pieces.forEach((p, j) => flat.push({ t: (j === 0 ? lead : '') + p, end: j === pieces.length - 1 }));
-        lead = '';
-      } else {
-        // punctuation hugs the word before it; an opening quote/bracket hugs the next word
-        const m = t.text.match(/^(\S*)(\s*)(.*)$/s);
-        if (flat.length && m[1]) flat[flat.length - 1].t += m[1];
-        else if (!flat.length) lead += m[1];
-        if (m[3]) lead += m[3].replace(/\s+/g, '');
-      }
-    });
-    return flat;
-  }
-
-  /**
-   * One typed word → its steps, one syllable each ("syllable" → "syl-", "la-", "ble").
-   * A word the writer already broke with "-" stays as typed.
-   */
-  function wordSteps(word) {
-    if (/-$/.test(word)) return [word];
-    const flat = sylPieces(word);
-    if (flat.length < 2) return [word];
-    return flat.map((s) => (s.end ? s.t : `${s.t}-`));
   }
 
   function textToSheet(text, bars = {}) {
@@ -479,7 +429,9 @@
           if (!inEditor) rerender();
         } },
         { label: 'Copy lyrics', icon: 'copy', onClick: async () => { try { await navigator.clipboard.writeText(f.text); toast('Lyrics copied'); } catch (e) { toast('Clipboard unavailable'); } } },
+        ...(navigator.share ? [{ label: 'Share lyrics', icon: 'share', onClick: () => navigator.share({ title: f.title, text: `${f.title}\n\n${f.text}` }).catch(() => {}) }] : []),
         { label: 'Export as .txt', icon: 'download', onClick: () => download(`${f.title}.txt`, new Blob([`${f.title}\n\n${f.text}\n`], { type: 'text/plain' })) },
+        { label: 'Print or save as PDF', icon: 'file', hint: 'A clean lyric sheet', onClick: () => printLyrics(f) },
         {
           label: 'Delete file', icon: 'trash', danger: true,
           onClick: async () => {
@@ -494,6 +446,23 @@
       ],
     });
   }
+  /** A print-only lyric sheet (sections as headings, stressed syllables in bold caps); the browser's print dialog saves it as PDF. */
+  function printLyrics(f) {
+    const old = $('#print');
+    if (old) old.remove();
+    const sheetEl = document.createElement('div');
+    sheetEl.id = 'print';
+    const line = (l) => syl.analyzeLine(l).tokens.map((t) => (!t.word || (t.syls[0] && t.syls[0].num) ? esc(t.text)
+      : t.syls.map((s) => (s.s === 1 ? `<b>${esc(s.t.toUpperCase())}</b>` : esc(s.t))).join(''))).join('');
+    sheetEl.innerHTML = `<h1>${esc(f.title)}</h1><p class="pmeta">${esc([pathOf(f), `${f.bpm} BPM`].filter(Boolean).join(' · '))}</p>`
+      + f.text.split('\n').map((l) => (!l.trim() ? '<div class="pgap"></div>' : isLabel(l) ? `<h2>${esc(l.trim().replace(/^\[|\]$/g, ''))}</h2>` : `<p>${line(l)}</p>`)).join('')
+      + '<p class="pfoot">LosSoulx FlowPad</p>';
+    document.body.appendChild(sheetEl);
+    const done = () => { sheetEl.remove(); window.removeEventListener('afterprint', done); };
+    window.addEventListener('afterprint', done);
+    setTimeout(() => window.print(), 50); // if afterprint never fires (some iOS versions), the next print replaces it
+  }
+
   async function renameFile(f) {
     const v = await ask({ title: 'Rename', value: f.title === 'Untitled' ? '' : f.title, placeholder: 'Song title' });
     if (!v) return;
@@ -564,13 +533,42 @@
 
 
   // =====================================================================
+  // KEEPING LYRICS SAFE — everything lives in this browser's storage
+  // =====================================================================
+  let persisted = null; // true once the browser agrees not to clear our storage by itself
+  async function protectStorage() {
+    try {
+      if (!navigator.storage || !navigator.storage.persist) return;
+      persisted = (await navigator.storage.persisted()) || (await navigator.storage.persist());
+    } catch (e) { /* not supported */ }
+  }
+  function exportBackup() {
+    const data = { app: 'FlowPad', version: 1, exported: new Date().toISOString(), projects: S.projects, folders: S.folders, files: S.files, patterns: S.patterns };
+    download(`flowpad-backup-${new Date().toISOString().slice(0, 10)}.json`, new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' }));
+    S.settings.lastBackup = Date.now();
+    S.settings.backupSnooze = 0;
+    saveSettings();
+    toast('Backup saved — keep it somewhere safe (Drive, email, cloud)');
+  }
+  /** Time for a reminder: lyrics changed since the last backup, and it's been a week (or never, after 3 days). */
+  function backupDue() {
+    if (!S.files.length || Date.now() < (S.settings.backupSnooze || 0)) return false;
+    const last = S.settings.lastBackup || 0;
+    if (!S.files.some((f) => (f.updated || 0) > last)) return false;
+    if (last) return Date.now() - last > 7 * 864e5;
+    return Date.now() - Math.min(...S.files.map((f) => f.created || Date.now())) > 3 * 864e5;
+  }
+
+  // =====================================================================
   // HOME
   // =====================================================================
   function Home() {
     setTop({ brand: true, right: `<button class="icon-btn" data-a="settings" aria-label="Settings">${icon('gear')}</button>` });
     const projects = [...S.projects].sort((a, b) => projTime(b) - projTime(a));
     const recent = [...S.files].sort(byUpd).slice(0, 4);
+    const last = S.settings.lastBackup;
     view.innerHTML = `<div class="page no-tabs">
+      ${backupDue() ? `<div class="notice">${icon('download')}<div class="grow"><b>Back up your lyrics</b><span>${last ? `Last backup ${ago(last)}.${persisted ? '' : ' This browser can clear your lyrics.'}` : `They’re only saved in this browser${persisted ? '' : ', which can clear them'}.`}</span></div><button class="btn primary" data-a="backup">Back up</button><button class="icon-btn muted" data-a="snooze" aria-label="Remind me later">${icon('x')}</button></div>` : ''}
       <label class="search">${icon('search')}<input id="q" type="search" placeholder="Search lyrics" autocomplete="off" aria-label="Search lyrics"></label>
       <div id="results"></div>
       <div id="home-main">
@@ -593,6 +591,8 @@
         : empty('search', 'No matches', 'Try another word or phrase.');
     });
 
+    VA.backup = () => { exportBackup(); rerender(); };
+    VA.snooze = () => { S.settings.backupSnooze = Date.now() + 3 * 864e5; saveSettings(); rerender(); };
     VA.add = () => sheet({
       title: 'Create',
       items: [
@@ -733,6 +733,7 @@
     view.innerHTML = `<div class="page ws">
       <div class="write-meta">
         <span class="stat" id="stat"></span>
+        <span class="ur"><button class="icon-btn" id="bundo" data-a="undo" aria-label="Undo" title="Undo (Ctrl+Z)" disabled>${icon('undo')}</button><button class="icon-btn" id="bredo" data-a="redo" aria-label="Redo" title="Redo (Ctrl+Shift+Z)" disabled>${icon('redo')}</button></span>
         <button class="chip sm" data-a="fdef" aria-label="Song beat">${icon('drum', 'sm')}<span id="songbeat">${esc(patName(f.beat.def))}</span></button>
       </div>
       <div class="gsheet" id="gsheet">
@@ -742,7 +743,7 @@
       </div>
       <div class="sheet-add"><button class="btn" data-a="add-bar">${icon('plus', 'sm')}Bar</button><button class="btn" data-a="add-sec">${icon('plus', 'sm')}Section</button></div>
       <p class="hint">Tap a step and type. <b>Space</b> moves to the next step, leave steps empty for rests, end a syllable with <b>-</b> to carry the word on (ci- ty), <b>Enter</b> starts the next bar. <b>Hold a step</b> to drag it — drop it on words to replace them or shift them along — or let go in place to insert or delete a step.</p>
-      <div class="legend"><span><b>CAPS</b> = stressed</span><span>Grey = unstressed</span><span>Underline = rhyme family</span><span><i class="lg k"></i>kick <i class="lg s"></i>snare <i class="lg h"></i>hat</span></div>
+      <div class="legend"><span><b>CAPS</b> = stressed</span><span>Grey = unstressed</span><span>Underline = rhyme family</span><span><i class="lg mcl"></i>Shade = rhyme chain <button class="link" data-a="chains" id="chainsb">${S.settings.chains === false ? 'off' : 'on'}</button></span><span><i class="lg k"></i>kick <i class="lg s"></i>snare <i class="lg h"></i>hat</span></div>
     </div>`;
     dock.hidden = false;
     dock.innerHTML = `<div class="panel" id="panel" hidden></div>
@@ -787,31 +788,52 @@
       ends.forEach((k) => { if (k && cnt[k] > 1 && color[k] == null) color[k] = c++ % 6; });
       return color;
     }
-    function lineHTML(l, color) {
+    /** A bar's lyric: stress per syllable, end-rhyme underlines, and rhyme-chain highlights (mk). */
+    function lineHTML(l, color, mk) {
+      let c = 0;
       return syl.analyzeLine(l).tokens.map((t) => {
         if (!t.word) return esc(t.text);
         if (t.syls[0] && t.syls[0].num) return `<span class="s1">${esc(t.text)}</span>`;
         const k = syl.rhymeKey(t.text);
         const r = k && color[k] != null ? ` data-r="${color[k]}"` : '';
-        return `<span class="w"${r}>${t.syls.map((s) => `<span class="s${s.s}">${esc(s.t)}</span>`).join('')}</span>`;
+        return `<span class="w"${r}>${t.syls.map((s) => {
+          const m = mk ? mk[c++] : -1;
+          return `<span class="s${s.s}${m >= 0 ? ' mc' : ''}"${m >= 0 ? ` data-c="${m % 6}"` : ''}>${esc(s.t)}</span>`;
+        }).join('')}</span>`;
       }).join('');
     }
+
+    /** Rhyme chains per section (bars between labels and blank lines): row → chain per syllable. */
+    function chainMarks(views) {
+      const marks = new Map();
+      if (S.settings.chains === false) return marks;
+      let run = [];
+      const flush = () => {
+        if (run.length > 1) syl.chains(run.map((ri) => views[ri].text)).forEach((m, j) => marks.set(run[j], m));
+        run = [];
+      };
+      rows.forEach((r, i) => { if (r.type === 'bar') run.push(i); else flush(); });
+      flush();
+      return marks;
+    }
+    VA.chains = () => { S.settings.chains = S.settings.chains === false; saveSettings(); paintAll(); $('#chainsb').textContent = S.settings.chains === false ? 'off' : 'on'; };
 
     function paintAll() {
       const views = rows.map((r) => (r.type === 'bar' ? barView(r.cells) : null));
       const color = rhymeColors(f.text.split('\n'));
+      const marks = chainMarks(views);
       let n = 0, total = 0;
       box.innerHTML = rows.map((row, i) => {
         if (row.type === 'blank') return `<div class="blk blank" data-r="${i}"></div>`;
         if (row.type === 'label') return `<button class="blk label" data-a="label" data-r="${i}">${esc(row.text)}</button>`;
         n++;
-        const v = views[i], steps = barSteps(f, i);
+        const v = views[i], steps = f.track && !f.track.drums ? null : barSteps(f, i); // no drum dots under an imported beat
         const has = (k, ...ts) => steps && ts.some((t) => steps[t] && steps[t][k]);
         const cnt = syl.lineCount(v.text);
         total += cnt;
         return `<div class="blk bar${i === nowLine ? ' now' : ''}${cur && cur.r === i ? ' cur' : ''}" data-r="${i}">
           <div class="bh"><span class="bar-n">${n}</span><button class="pat-btn ${row.pat ? 'set' : ''}" data-a="bar-pat" data-r="${i}" data-n="${n}">${esc(row.pat ? patName(row.pat) : patName(f.beat.def))}</button><span class="grow"></span><span class="cnt">${cnt} syl</span><button class="icon-btn bm" data-a="bar-menu" data-r="${i}" data-n="${n}" aria-label="Bar ${n} options">${icon('more')}</button></div>
-          <div class="bline" data-a="bar-go" data-r="${i}">${v.text ? lineHTML(v.text, color) : '<span class="ph-t2">Tap a step to write</span>'}</div>
+          <div class="bline" data-a="bar-go" data-r="${i}">${v.text ? lineHTML(v.text, color, marks.get(i)) : '<span class="ph-t2">Tap a step to write</span>'}</div>
           <div class="bgrid">${range(16).map((k) => {
             const raw = (row.cells[k] || '').trim();
             const cont = /\S-$/.test(raw);
@@ -834,7 +856,60 @@
         .filter(([, r]) => r < 1)
         .forEach(([c, r]) => { c.style.fontSize = `${Math.max(8, Math.floor(base * r * 10) / 10)}px`; });
     }
-    const commit = () => { sync(); paintAll(); queueStrip(); };
+    /** Every change to the sheet goes through here. kind 'type' = typing, which undoes in bursts. */
+    const commit = (kind) => { sync(); record(kind); paintAll(); queueStrip(); };
+
+    // ---------------- undo / redo: snapshots of the sheet ----------------
+    const hist = { undo: [], redo: [], snap: JSON.stringify(rows), typing: 0 };
+    function record(kind) {
+      const now = JSON.stringify(rows);
+      if (now === hist.snap) return;
+      // keep typing in one undo step until there's a pause
+      const burst = kind === 'type' && hist.typing && Date.now() - hist.typing < 1500;
+      if (!burst) { hist.undo.push(hist.snap); if (hist.undo.length > 200) hist.undo.shift(); }
+      hist.redo = [];
+      hist.snap = now;
+      hist.typing = kind === 'type' ? Date.now() : 0;
+      undoUI();
+    }
+    function restore(json) {
+      rows.splice(0, rows.length, ...JSON.parse(json));
+      hist.snap = json;
+      hist.typing = 0;
+      if (cur && !isBarRow(cur.r)) cur = null;
+      sync();
+      paintAll();
+      queueStrip();
+      undoUI();
+      if (cur && document.activeElement === inp) activate(cur.r, cur.k);
+    }
+    function undo() {
+      if (!hist.undo.length) return toast('Nothing to undo');
+      hist.redo.push(hist.snap);
+      restore(hist.undo.pop());
+    }
+    function redo() {
+      if (!hist.redo.length) return toast('Nothing to redo');
+      hist.undo.push(hist.snap);
+      restore(hist.redo.pop());
+    }
+    function undoUI() {
+      const u = $('#bundo'), r = $('#bredo');
+      if (u) u.disabled = !hist.undo.length;
+      if (r) r.disabled = !hist.redo.length;
+    }
+    VA.undo = undo;
+    VA.redo = redo;
+    const onUndoKey = (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const k = e.key.toLowerCase();
+      if (k !== 'z' && k !== 'y') return;
+      const t = e.target;
+      if (t !== inp && t.matches && t.matches('input, textarea, [contenteditable="true"]')) return; // other fields keep their own undo
+      e.preventDefault();
+      if (k === 'y' || e.shiftKey) redo(); else undo();
+    };
+    document.addEventListener('keydown', onUndoKey);
 
     /** Float the single step input over the active cell (so the keyboard never drops between steps). */
     function placeInput() {
@@ -914,55 +989,12 @@
       activate(p, lf < 0 ? 0 : lf);
     }
 
-    /** The bar row after row r — a new one is inserted there if the next row isn't a bar. */
-    function barAfter(r) {
-      if (isBarRow(r + 1)) return r + 1;
-      rows.splice(r + 1, 0, newBarRow());
-      if (nowLine > r) nowLine++;
-      if (cur && cur.r > r) cur.r++;
-      return r + 1;
-    }
-    /** The step after (r, k), carrying over into the next bar. */
-    const nextPos = (r, k) => (k < 15 ? { r, k: k + 1 } : { r: barAfter(r), k: 0 });
-
-    /**
-     * Make room at step k of row r: it and the words right after it move one step later, up to
-     * the next rest. With no rest left in the bar, the last step carries over into the next bar.
-     */
-    function pushAt(r, k) {
-      const row = rows[r];
-      let j = k;
-      while (j <= 15 && row.cells[j].trim()) j++;
-      if (j > 15) {
-        const nr = barAfter(r);
-        pushAt(nr, 0);
-        rows[nr].cells[0] = row.cells[15];
-        j = 15;
-      }
-      for (let i = j; i > k; i--) row.cells[i] = row.cells[i - 1];
-      row.cells[k] = '';
-    }
-    /** Remove step k: everything after it moves one step earlier. */
-    function pullAt(row, k) { row.cells.splice(k, 1); row.cells.push(''); }
-
-    /**
-     * Write words from step k of row r on: each word starts a step and its syllables flow into
-     * the following steps, over the bar line if needed. Words already there are pushed later,
-     * never overwritten — except the starting step when `replace` (the step being typed in).
-     * Returns the last step used, { r, k }.
-     */
-    function placeWords(r, k, words, replace = true) {
-      let pos = { r, k }, first = true;
-      words.forEach((w, idx) => {
-        wordSteps(w).forEach((s, j) => {
-          if (idx > 0 || j > 0) pos = nextPos(pos.r, pos.k);
-          if (!(first && replace) && rows[pos.r].cells[pos.k].trim()) pushAt(pos.r, pos.k);
-          rows[pos.r].cells[pos.k] = s;
-          first = false;
-        });
-      });
-      return pos;
-    }
+    // step editing (js/sheet.js) on this song's rows; a bar inserted above shifts the cursor and playhead
+    const onInsert = (at) => { if (nowLine >= at) nowLine++; if (cur && cur.r >= at) cur.r++; };
+    const nextPos = (r, k) => SH.nextPos(rows, r, k, onInsert);
+    const pushAt = (r, k) => SH.pushAt(rows, r, k, onInsert);
+    const pullAt = SH.pullAt;
+    const placeWords = (r, k, words, replace) => SH.placeWords(rows, r, k, words, replace, onInsert);
 
     inp.addEventListener('input', () => {
       if (!cur) return;
@@ -980,7 +1012,7 @@
       }
       if (v === '-') { inp.value = ''; return; }
       row.cells[cur.k] = v;
-      commit();
+      commit('type');
       if (v.length > 1 && v.endsWith('-')) step(1); // syllable continues on the next step
     });
     /** Enter ends the line: split the word in the current step across the steps after it first. */
@@ -1073,9 +1105,7 @@
       if (!text.trim()) return;
       const there = rows[tr].cells[tk].trim();
       const done = (shift) => {
-        rows[fr].cells[fk] = '';
-        if (shift) pushAt(tr, tk); // the words from here on move one step later (over the bar line if needed)
-        rows[tr].cells[tk] = text;
+        SH.moveStep(rows, fr, fk, tr, tk, shift, onInsert); // shift: the words from there on move one step later
         commit();
         activate(tr, tk, { focus: false });
       };
@@ -1340,7 +1370,18 @@
     const songPat = () => pattern(f.beat.def) || patternsSorted()[0];
     function PBeat() {
       const pat = songPat();
+      const tk = trackReady();
+      const trackHTML = f.track
+        ? `<div class="trackbox">${icon('rhyme')}<div class="grow"><b>${esc(tk ? tk.rec.name : 'Loading your beat…')}</b><span class="tsub">${tk ? `${tk.rec.bpm} BPM · ${tk.rec.bars}-bar loop${f.bpm !== tk.rec.bpm ? ` · playing at ${f.bpm}` : ''}` : ''}</span></div><label class="mini"><span>Drums</span><input type="checkbox" class="switch" id="tdrums" ${f.track.drums ? 'checked' : ''} aria-label="Play the drum patterns over the beat"></label><button class="icon-btn muted" data-a="tmenu" aria-label="Beat options">${icon('more')}</button></div>`
+        : `<button class="btn block" data-a="timport">${icon('upload', 'sm')}Import your beat (MP3, WAV…)</button>`;
+      const secs = tk && tk.rec.sections;
+      const structHTML = !tk || tk.rec.bars < 8 ? ''
+        : secs && secs.length
+          ? `<div class="struct" id="struct" role="group" aria-label="Beat structure">${secs.map((s, i) => `<button class="sseg" data-a="sjump" data-i="${i}" data-kind="${secKind(s.name)}" style="flex:${s.bars}" title="${esc(s.name)} · ${plural(s.bars, 'bar')}"><b>${esc(s.name)}</b><span>${s.bars}</span></button>`).join('')}</div>
+            <div class="struct-act"><button class="chip sm" data-a="sedit">${icon('edit', 'sm')}Edit structure</button><button class="chip sm" data-a="slayout">${icon('project', 'sm')}Lay out song to match</button></div>`
+          : `<div class="struct-act"><button class="chip sm" data-a="sfind">${icon('sparkle', 'sm')}Find the beat’s structure</button></div>`;
       panel.innerHTML = `<div class="ph"><div class="chips scroll grow">${patternsSorted().map((p) => `<button class="chip sm ${p.id === pat.id ? 'on' : ''}" data-a="bpick" data-id="${p.id}">${esc(p.name)}</button>`).join('')}<button class="chip sm ghost" data-a="bnew">${icon('plus', 'sm')}New</button></div><button class="icon-btn muted" data-a="bmore" aria-label="Pattern options">${icon('more')}</button>${closeBtn}</div>
+        ${trackHTML}${structHTML}<input type="file" id="tfile" accept="audio/*" hidden>
         <div class="seq" id="seq">${[0, 1].map((h) => `<div class="half">${TRACKS.map((t) => `<div class="trk"><span class="tl">${t.name}</span>${range(8).map((j) => { const k = h * 8 + j; const on = !!pat.steps[t.id][k]; return `<button class="st ${on ? 'on' : ''} ${k % 4 === 0 ? 'b' : ''}" data-a="step" data-t="${t.id}" data-k="${k}" aria-label="${t.name} step ${k + 1}" aria-pressed="${on}"></button>`; }).join('')}</div>`).join('')}</div>`).join('')}</div>
         <div class="beat-ctl">${bpmCtl(f.bpm)}
           <label class="mini"><span>Swing</span><input type="range" class="range" id="swing" min="0" max="40" value="${Math.round(f.swing * 100)}"></label>
@@ -1349,7 +1390,194 @@
         <p class="hint">The highlighted pattern is the song beat${pat.bpm ? ` (sits around ${pat.bpm} BPM)` : ''}. Tap a bar's beat label on the sheet to give it its own pattern.</p>`;
       $('#swing').addEventListener('input', (e) => { f.swing = e.target.value / 100; if (T.drums) audio.update({ swing: f.swing }); saveSoon('files', f); });
       $('#bclick').addEventListener('change', (e) => { T.click = e.target.checked; syncTransport(); });
+      $('#tfile').addEventListener('change', (e) => { const fl = e.target.files[0]; e.target.value = ''; if (fl) importBeat(fl); });
+      const td = $('#tdrums');
+      if (td) td.addEventListener('change', () => { f.track.drums = td.checked; saveSoon('files', f); paintAll(); if (T.drums) syncTransport(true); });
     }
+
+    VA.timport = () => $('#tfile').click();
+    async function importBeat(fl) {
+      toast('Loading your beat…');
+      let buf;
+      try { buf = await audio.decode(fl); } catch (e) { toast('Couldn’t read that audio file'); return; }
+      const named = fl.name.match(/(\d{2,3})\s*bpm/i); // most beat files say their tempo
+      const guess = named ? +named[1] : audio.guessBpm(buf);
+      const b = { id: FP.uid(), name: fl.name.replace(/\.[^.]+$/, '') || 'My beat', blob: fl, mime: fl.type, bpm: clamp(Math.round(guess || f.bpm), 50, 220), offset: 0, bars: 4, duration: buf.duration, created: Date.now() };
+      if (!(await beatSettings(b, true))) return;
+      if (b.bars >= 8) b.sections = findSections(b, buf);
+      await db.put('beats', b);
+      tracks.set(b.id, { rec: b, buf });
+      if (f.track && f.track.id !== b.id) await dropBeat(f.track.id);
+      f.track = { id: b.id, drums: false };
+      setBpm(b.bpm);
+      saveSoon('files', f);
+      if (T.drums) syncTransport(true);
+      paintAll();
+      if (S.panel === 'beat') PBeat();
+      if (b.sections && b.sections.length > 1) offerLayout(b.sections);
+      else toast('Beat added — hit Play');
+    }
+
+    // ----- the imported beat's structure: Intro · Verse · Hook · Outro -----
+    const secKind = (name) => (/^(intro|outro)/i.test(name) ? 'edge' : /^(hook|chorus)/i.test(name) ? 'hook' : /^bridge/i.test(name) ? 'bridge' : 'verse');
+    const secSummary = (secs) => secs.map((s) => `${s.name} ${s.bars}`).join(' · ');
+    function findSections(b, buf) {
+      try { return FP.structure.detect(audio.barFeatures(buf, b.bpm, b.offset, b.bars)); } catch (e) { return null; }
+    }
+    /** Put a label at each of the beat's sections; bar k of the sheet then plays over bar k of the beat. */
+    function layOut(secs) {
+      rows.splice(0, rows.length, ...FP.structure.layout(rows, secs));
+      cur = null;
+      commit();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      toast('Song laid out to the beat — Undo puts it back');
+    }
+    function offerLayout(secs) {
+      const sh = sheet({
+        title: 'Beat structure found',
+        html: `<p class="msg">${esc(secSummary(secs))}</p><p class="msg">Lay out your song to match? Each section gets a label at the bar where the beat changes, and empty bars are added to cover the whole beat. Your lyrics stay in order.</p>
+          <div class="sheet-actions"><button class="btn" data-close>Not now</button><button class="btn primary" data-a="go">Lay out song</button></div>`,
+        actions: { go: () => { sh.close(); layOut(secs); } },
+      });
+    }
+    VA.sfind = () => {
+      const tk = trackReady();
+      if (!tk) return;
+      tk.rec.sections = findSections(tk.rec, tk.buf);
+      db.put('beats', tk.rec);
+      PBeat();
+      if (tk.rec.sections && tk.rec.sections.length > 1) offerLayout(tk.rec.sections);
+      else toast('No clear changes found — the beat sounds the same throughout');
+    };
+    VA.slayout = () => {
+      const tk = trackReady();
+      if (tk && tk.rec.sections) offerLayout(tk.rec.sections);
+    };
+    /** Scroll the sheet to the first bar of section i. */
+    VA.sjump = (el) => {
+      const tk = trackReady();
+      if (!tk) return;
+      const start = tk.rec.sections.slice(0, +el.dataset.i).reduce((a, s) => a + s.bars, 0);
+      const ri = barLines(f)[start];
+      const b = ri != null && blkEl(ri);
+      if (b) b.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      else toast('Lay out the song to match first');
+    };
+    VA.sedit = () => {
+      const tk = trackReady();
+      if (!tk) return;
+      let secs = (tk.rec.sections || []).map((s) => ({ ...s }));
+      const sh = sheet({ title: 'Beat structure', html: '<div id="sedl"></div>' });
+      const box0 = $('#sedl', sh.el);
+      const total = () => secs.reduce((a, s) => a + (+s.bars || 0), 0);
+      const draw = () => {
+        box0.innerHTML = `${secs.map((s, i) => `<div class="sed-row" data-i="${i}"><input class="field" data-f="name" value="${esc(s.name)}" aria-label="Section name"><input class="field num" data-f="bars" type="number" inputmode="numeric" min="1" max="256" value="${s.bars}" aria-label="Bars"><button type="button" class="icon-btn muted" data-x="${i}" aria-label="Remove section">${icon('x')}</button></div>`).join('')}
+          <button type="button" class="btn block" id="sadd">${icon('plus', 'sm')}Add section</button>
+          <p class="src" id="stot"></p>
+          <div class="sheet-actions"><button type="button" class="btn" id="sredo">${icon('sparkle', 'sm')}Detect again</button><button type="button" class="btn primary" id="ssave">Save</button></div>
+          <button type="button" class="btn block" id="ssavelay">Save and lay out song</button>`;
+        tot();
+      };
+      const tot = () => {
+        const t = total(), n = tk.rec.bars;
+        $('#stot', sh.el).textContent = t === n ? `${plural(t, 'bar')} — the whole beat` : `${t} of the beat’s ${n} bars${t < n ? ' — the rest plays unlabelled' : ' — more than the beat; it loops'}`;
+      };
+      box0.addEventListener('input', (e) => {
+        const r = e.target.closest('.sed-row');
+        if (!r) return;
+        const s = secs[+r.dataset.i];
+        if (e.target.dataset.f === 'name') s.name = e.target.value;
+        else s.bars = Math.max(1, Math.round(+e.target.value || 1));
+        tot();
+      });
+      box0.addEventListener('click', (e) => {
+        const x = e.target.closest('[data-x]');
+        if (x) { secs.splice(+x.dataset.x, 1); draw(); return; }
+        if (e.target.closest('#sadd')) { secs.push({ name: secs.some((s) => /^hook/i.test(s.name)) ? 'Verse' : 'Hook', bars: 8 }); draw(); return; }
+        if (e.target.closest('#sredo')) { secs = findSections(tk.rec, tk.buf) || secs; draw(); return; }
+        const save = e.target.closest('#ssave, #ssavelay');
+        if (!save) return;
+        secs = secs.filter((s) => s.bars > 0).map((s) => ({ name: s.name.trim() || 'Section', bars: s.bars }));
+        tk.rec.sections = secs;
+        db.put('beats', tk.rec);
+        sh.close();
+        PBeat();
+        if (save.id === 'ssavelay' && secs.length) layOut(secs);
+      });
+      draw();
+    };
+    /** Delete a beat file if no other song uses it. */
+    async function dropBeat(id) {
+      if (!S.files.some((x) => x !== f && x.track && x.track.id === id)) { await db.del('beats', id); tracks.delete(id); }
+    }
+
+    /** Tempo, where bar 1 starts, and loop length — resolves true when saved. */
+    function beatSettings(b, isNew) {
+      return new Promise((resolve) => {
+        let taps = [], barsTouched = !isNew;
+        const autoBars = () => Math.max(1, Math.round(((b.duration - b.offset) * b.bpm) / 240));
+        if (isNew) b.bars = autoBars();
+        const sh = sheet({
+          title: isNew ? 'Your beat' : b.name,
+          html: `<form class="beatform">
+            <label class="set-row"><div><div class="lbl">Tempo</div><div class="sub">${isNew ? 'Guessed — check it, or tap along' : 'The beat’s own BPM'}</div></div><span class="mrow"><input class="field num" name="bpm" type="number" inputmode="decimal" min="50" max="220" step="1" value="${b.bpm}"><button type="button" class="btn" data-a="btap">Tap</button></span></label>
+            <label class="set-row"><div><div class="lbl">Bar 1 starts at</div><div class="sub">Seconds into the file — skip an intro or silence</div></div><input class="field num" name="offset" type="number" inputmode="decimal" min="0" step="0.01" value="${b.offset}"></label>
+            <label class="set-row"><div><div class="lbl">Loop length</div><div class="sub">Bars before it starts over (whole file = ${autoBars()})</div></div><input class="field num" name="bars" type="number" inputmode="numeric" min="1" max="256" step="1" value="${b.bars}"></label>
+            <div class="sheet-actions"><button type="button" class="btn" data-close>Cancel</button><button class="btn primary">${isNew ? 'Use this beat' : 'Save'}</button></div></form>`,
+          actions: {
+            btap: () => {
+              const now = performance.now();
+              if (taps.length && now - taps[taps.length - 1] > 2000) taps = [];
+              taps.push(now);
+              taps = taps.slice(-8);
+              if (taps.length >= 3) { form.elements.bpm.value = Math.round(60000 / ((taps[taps.length - 1] - taps[0]) / (taps.length - 1))); sync0(); }
+            },
+          },
+        });
+        const form = sh.el.querySelector('form');
+        let done = false;
+        const sync0 = () => {
+          b.bpm = clamp(+form.elements.bpm.value || b.bpm, 50, 220);
+          b.offset = Math.max(0, Math.min(b.duration - 0.5, +form.elements.offset.value || 0));
+          if (!barsTouched) form.elements.bars.value = autoBars();
+        };
+        form.elements.bpm.addEventListener('input', sync0);
+        form.elements.offset.addEventListener('input', sync0);
+        form.elements.bars.addEventListener('input', () => { barsTouched = true; });
+        form.addEventListener('submit', (e) => {
+          e.preventDefault();
+          sync0();
+          b.bars = clamp(Math.round(+form.elements.bars.value || autoBars()), 1, 256);
+          done = true;
+          sh.close();
+          resolve(true);
+        });
+        sh.onclose = () => { if (!done) resolve(false); };
+      });
+    }
+    VA.tmenu = () => {
+      const tk = trackReady();
+      if (!tk) return;
+      sheet({
+        title: tk.rec.name,
+        items: [
+          { label: 'Tempo, start and loop', icon: 'metro', onClick: async () => {
+            const b = { ...tk.rec };
+            if (!(await beatSettings(b, false))) return;
+            const moved = b.bpm !== tk.rec.bpm || b.offset !== tk.rec.offset || b.bars !== tk.rec.bars;
+            Object.assign(tk.rec, b);
+            if (moved && tk.rec.sections) tk.rec.sections = tk.rec.bars >= 8 ? findSections(tk.rec, tk.buf) : null; // bar lines moved: find the sections again
+            await db.put('beats', tk.rec);
+            setBpm(b.bpm);
+            if (T.drums) syncTransport(true);
+            PBeat();
+          } },
+          { label: 'Structure', icon: 'project', hint: 'Intro, verses, hooks…', onClick: () => (tk.rec.bars >= 8 ? (tk.rec.sections ? VA.sedit() : VA.sfind()) : toast('Structure needs a beat of 8 bars or more')) },
+          { label: 'Replace with another file', icon: 'upload', onClick: () => $('#tfile').click() },
+          { label: 'Remove beat', icon: 'trash', danger: true, hint: 'Back to the drum patterns', onClick: async () => { const id = f.track.id; delete f.track; saveSoon('files', f); await dropBeat(id); if (T.drums) syncTransport(true); paintAll(); PBeat(); } },
+        ],
+      });
+    };
     VA.step = (el) => {
       const pat = songPat();
       const t = el.dataset.t, k = +el.dataset.k;
@@ -1402,19 +1630,18 @@
     };
 
     // ----- Takes panel + recorder -----
-    let recOn = false, autoDrums = false, takes = [], playingId = null, hearing = false, gone = false;
+    let recOn = false, autoDrums = false, takes = [], playingId = null, hearing = false, gone = false, counting = false;
     const wantWords = () => S.settings.recWords !== false && voice.supported();
-    const player = new Audio();
-    const urls = new Map();
-    const urlOf = (t) => { if (!urls.has(t.id)) urls.set(t.id, URL.createObjectURL(t.blob)); return urls.get(t.id); };
 
     function PTakes() {
       panel.innerHTML = `<div class="ph"><span class="ph-t">Takes</span><span class="count" id="tc"></span><span class="grow"></span><button class="chip sm ${S.settings.recBeat ? 'on' : ''}" data-a="ropt">${icon('drum', 'sm')}Beat on rec</button>${closeBtn}</div>
+        <label class="set-row"><div><div class="lbl">Count in</div><div class="sub">One bar of clicks before the beat starts</div></div><input type="checkbox" class="switch" id="rcount" ${S.settings.countIn !== false ? 'checked' : ''}></label>
         ${voice.supported() ? `<label class="set-row"><div><div class="lbl">Write my words into the steps</div><div class="sub">Your words land on the steps you rap them on. Uses the browser’s speech recognition, which may send audio to Google or Apple.</div></div><input type="checkbox" class="switch" id="rwords" ${wantWords() ? 'checked' : ''}></label>` : ''}
         <ul class="list" id="takes"></ul>
         <p class="hint">${rec.supported() ? 'Hit Rec in the dock — the beat starts with you and follows the patterns placed on your bars. Headphones keep the beat out of your vocal (and out of the word timing).' : 'Recording needs microphone access, which browsers only allow over HTTPS or on localhost.'}${rec.supported() && !voice.supported() ? ' This browser can’t turn speech into words — try Chrome, Edge or Safari for that.' : ''}</p>`;
       const rw = $('#rwords');
       if (rw) rw.addEventListener('change', () => { S.settings.recWords = rw.checked; saveSettings(); });
+      $('#rcount').addEventListener('change', (e) => { S.settings.countIn = e.target.checked; saveSettings(); });
       loadTakes();
     }
     async function loadTakes() {
@@ -1442,21 +1669,37 @@
       const heard = hearing ? voice.stop() : null;
       hearing = false;
       const clock = { ...audio.timeline(), drums: T.drums, lat: audio.latency() };
+      counting = false;
       if (autoDrums) { autoDrums = false; T.drums = false; syncTransport(true); }
       const r = await rec.stop();
       setRecUI(false);
-      if (r && r.duration > 0.5) {
-        const all = await db.byIndex('recordings', 'fileId', f.id);
-        await db.put('recordings', { id: FP.uid(), fileId: f.id, name: `Take ${all.length + 1}`, blob: r.blob, mime: r.mime, duration: r.duration, created: Date.now() });
-        if (S.panel === 'takes') loadTakes();
-        if (!heard) toast(S.panel === 'takes' ? 'Take saved' : 'Take saved — find it in Takes');
-      }
+      if (!gone) updateStrip(true); // drop the "Hearing" line
+      if (!r || r.duration <= 0.5) return;
+      // the take keeps when each step fell and what was heard, in seconds from its start —
+      // enough to play it back in time with the beat, or write its words again later
+      const timing = {
+        log: clock.log.filter((e) => e.t >= r.t0 - 1 && e.t <= r.t0 + r.duration + 1).map((e) => ({ ...e, t: +(e.t - r.t0).toFixed(4) })),
+        bpm: clock.bpm, drums: clock.drums, lat: clock.lat,
+      };
+      const all = await db.byIndex('recordings', 'fileId', f.id);
+      const take = { id: FP.uid(), fileId: f.id, name: `Take ${all.length + 1}`, blob: r.blob, mime: r.mime, duration: r.duration, created: Date.now(), timing };
       if (heard) {
-        if (!gone) updateStrip(true); // drop the "Hearing" line
-        toast('Writing your words into the steps…');
-        await wordsToSteps(await heard, r, clock);
-        if (!gone) updateStrip(true);
+        const h = await heard;
+        take.heard = h.phrases.map((p) => ({ text: p.text, tFirst: p.tFirst - r.t0, tLast: p.tLast - r.t0 }));
+        take.heardError = h.error;
       }
+      await db.put('recordings', take);
+      if (S.panel === 'takes') loadTakes();
+      if (!heard) { toast(S.panel === 'takes' ? 'Take saved' : 'Take saved — find it in Takes'); return; }
+      toast('Writing your words into the steps…');
+      await writeTake(take, 'Take saved · ');
+      if (!gone) updateStrip(true);
+    }
+
+    /** Write a take's words into the steps, and remember which bars they went to. */
+    async function writeTake(take, prefix = '') {
+      const bars = await wordsToSteps({ phrases: take.heard || [], error: take.heardError }, take.blob, take.timing, prefix);
+      if (bars) { take.bars = bars; await db.put('recordings', take); }
     }
 
     /** While recording, the strip shows what speech recognition is hearing. */
@@ -1467,10 +1710,10 @@
       stripEl.scrollLeft = stripEl.scrollWidth;
     }
 
-    /** Where the beat was at audio-clock time t, in bars (bar 2, halfway = 2.5). */
-    function barPos(clock, t, t0) {
+    /** Where the beat was at time t of a take (seconds from its start), in bars (bar 2, halfway = 2.5). */
+    function barPos(clock, t) {
       const L = clock.log, bpm = clock.bpm || f.bpm;
-      if (!L.length || L[L.length - 1].t < t0) return Math.max(0, (t - t0) * bpm / 240); // no beat: bars from the take's start
+      if (!L.length || L[L.length - 1].t < 0) return Math.max(0, t * bpm / 240); // no beat: bars from the take's start
       const at = (e) => e.bar + e.step / e.n;
       if (t <= L[0].t) return at(L[0]) - (L[0].t - t) * bpm / 240;
       let lo = 0, hi = L.length - 1;
@@ -1483,30 +1726,30 @@
     /**
      * Put the words heard during a take onto the steps they were said on. Bars that played
      * empty are filled; anything else goes into new bars at the end — nothing written is overwritten.
+     * Times are seconds from the take's start. Returns { recorded bar: bar number on the sheet }.
      */
-    async function wordsToSteps(heard, r, clock) {
-      if (gone) return;
-      const t0 = r ? r.t0 : 0;
+    async function wordsToSteps(heard, blob, clock, prefix = '') {
+      if (gone) return null;
       const list = heard.phrases
-        .map((p) => { const pcs = sylPieces(p.text.trim()); return { pcs, n: pcs.length, tFirst: p.tFirst - t0, tLast: p.tLast - t0 }; })
+        .map((p) => { const pcs = sylPieces(p.text.trim()); return { pcs, n: pcs.length, tFirst: p.tFirst, tLast: p.tLast }; })
         .filter((p) => p.n);
       if (!list.length) {
         const why = { 'not-allowed': 'Speech recognition is blocked', 'service-not-allowed': 'Speech recognition is blocked', network: 'Speech recognition needs an internet connection', 'audio-capture': 'Speech recognition couldn’t use the mic' }[heard.error];
-        toast(`${why || 'No words heard'} — take saved`);
-        return;
+        toast(`${why || 'No words heard'}${prefix ? ' — take saved' : ''}`);
+        return null;
       }
       let an = { onsets: [], segments: [] };
-      if (r && r.blob) { try { an = await voice.analyze(r.blob); } catch (e) { /* timing falls back to when the words were heard */ } }
-      if (gone) return;
+      if (blob) { try { an = await voice.analyze(blob); } catch (e) { /* timing falls back to when the words were heard */ } }
+      if (gone) return null;
       const times = voice.align(list, an);
 
       // each syllable → an absolute 16th step (bar * 16 + step), never earlier than the one before
       const lag = clock.lat + 0.02;
-      const start = Math.max(0, Math.floor(barPos(clock, t0, t0) * 16));
+      const start = Math.max(0, Math.floor(barPos(clock, 0) * 16));
       const placed = [];
       let lastQ = -1;
       list.forEach((p, i) => p.pcs.forEach((pc, j) => {
-        let q = Math.max(start, Math.round(barPos(clock, t0 + times[i][j] - lag, t0) * 16));
+        let q = Math.max(start, Math.round(barPos(clock, times[i][j] - lag) * 16));
         if (q < lastQ) q = lastQ;
         lastQ = q;
         placed.push({ q, pc });
@@ -1535,9 +1778,12 @@
       steps.forEach((L, key) => { const [ri, k] = key.split(':').map(Number); rows[ri].cells[k] = stepText(L); });
       commit();
       const nw = list.reduce((a, p) => a + p.pcs.filter((x) => x.end).length, 0), nb = lastB - firstB + 1;
-      toast(`Take saved · ${plural(nw, 'word')} written into ${plural(nb, 'bar')}`);
+      toast(`${prefix}${plural(nw, 'word')} written into ${plural(nb, 'bar')}`);
       const first = blkEl(rowOf.get(firstB));
       if (first) first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      const ords = barLines(f), out = {};
+      rowOf.forEach((ri, b) => { out[b] = ords.indexOf(ri); });
+      return out;
     }
     VA.drec = async () => {
       if (recOn) return finishRec();
@@ -1547,7 +1793,7 @@
         await rec.start((lvl, t) => {
           const b = $('#drec');
           if (!b) return;
-          $('#rlabel').textContent = fmtDur(t);
+          if (!counting) $('#rlabel').textContent = fmtDur(t);
           b.querySelector('i').style.transform = `scale(${1 + Math.min(0.7, lvl * 5)})`;
         });
       } catch (e) {
@@ -1556,35 +1802,70 @@
       }
       recOn = true;
       setRecUI(true);
-      if (S.settings.recBeat && !T.drums) { T.drums = true; autoDrums = true; syncTransport(true); }
+      if (S.settings.recBeat && !T.drums) {
+        // one bar of clicks first, so you come in on bar 1 instead of chasing it
+        counting = S.settings.countIn !== false;
+        T.drums = true; autoDrums = true;
+        syncTransport(true, counting ? 1 : 0);
+      }
       if (wantWords()) {
         hearing = voice.start(audio.now, showHeard);
         if (hearing) showHeard('');
       }
     };
 
+    // ----- take playback: the beat you heard plays along, and the grid follows the words -----
+    const bufs = new Map(); // take id → decoded audio
+    let stopTake = null, takeRaf = 0;
     function stopPlayer() {
-      player.pause();
-      if (playingId) { const b = $(`[data-a="tplay"][data-id="${playingId}"]`); if (b) b.innerHTML = icon('play'); }
+      if (stopTake) { stopTake(); stopTake = null; }
+      cancelAnimationFrame(takeRaf);
+      if (audio.state().kind === 'take') audio.stop();
+      if (playingId) {
+        const b = $(`[data-a="tplay"][data-id="${playingId}"]`);
+        if (b) b.innerHTML = icon('play');
+        const bar = $(`.take[data-id="${playingId}"] .take-bar div`);
+        if (bar) bar.style.width = '0';
+        clearNow();
+      }
       playingId = null;
     }
-    player.addEventListener('timeupdate', () => {
-      const t = takes.find((x) => x.id === playingId);
-      const bar = t && $(`.take[data-id="${t.id}"] .take-bar div`);
-      if (bar) bar.style.width = `${Math.min(100, (player.currentTime / (t.duration || 1)) * 100)}%`;
-    });
-    player.addEventListener('ended', () => {
-      const bar = playingId && $(`.take[data-id="${playingId}"] .take-bar div`);
-      if (bar) bar.style.width = '0';
+    async function playTake(t, el) {
       stopPlayer();
-    });
+      if (T.drums || T.click) { T.drums = T.click = false; syncTransport(); }
+      let buf = bufs.get(t.id);
+      if (!buf) {
+        try { buf = await audio.decode(t.blob); bufs.set(t.id, buf); } catch (e) { toast('This take can’t play in this browser'); return; }
+      }
+      const T0 = audio.now() + 0.15;
+      playingId = t.id;
+      el.innerHTML = icon('pause');
+      stopTake = audio.playBuffer(buf, T0, () => { if (playingId === t.id) stopPlayer(); });
+      const tm = t.timing;
+      // restart the beat from the first bar line inside the take, on the same clock
+      const first = tm && tm.drums && tm.log.find((e) => e.t >= 0 && e.step === 0);
+      if (first) audio.play({ ...transportCfg(true), kind: 'take', click: false, startAt: T0 + first.t, startBar: first.bar, onStep: null, onStop: null });
+      const ords = barLines(f);
+      const follow = () => {
+        if (playingId !== t.id) return;
+        const at = audio.now() - T0;
+        const bar = $(`.take[data-id="${t.id}"] .take-bar div`);
+        if (bar) bar.style.width = `${clamp((at / (t.duration || 1)) * 100, 0, 100)}%`;
+        if (tm && at >= 0) {
+          const q = Math.floor(barPos(tm, at - (tm.lat || 0)) * 16);
+          const b = Math.floor(q / 16);
+          const ord = t.bars && t.bars[b] != null ? t.bars[b] : (b >= 0 && ords.length ? b % ords.length : -1);
+          if (b >= 0 && ord >= 0) showStep(ords[ord], q % 16);
+        }
+        takeRaf = requestAnimationFrame(follow);
+      };
+      follow();
+    }
     VA.tplay = (el) => {
       const t = takes.find((x) => x.id === el.dataset.id);
       if (!t) return;
       if (playingId === t.id) { stopPlayer(); return; }
-      stopPlayer();
-      player.src = urlOf(t);
-      player.play().then(() => { playingId = t.id; el.innerHTML = icon('pause'); }).catch(() => toast('This take can’t play in this browser'));
+      playTake(t, el);
     };
     VA.tmore = (el) => {
       const t = takes.find((x) => x.id === el.dataset.id);
@@ -1592,6 +1873,7 @@
       const ext = /mp4|m4a|aac/.test(t.mime) ? 'm4a' : /ogg/.test(t.mime) ? 'ogg' : 'webm';
       const name = `${f.title} - ${t.name}.${ext}`;
       const items = [
+        ...(t.heard && t.heard.length ? [{ label: 'Write its words into the steps', icon: 'pen', hint: 'Again, into empty or new bars', onClick: async () => { toast('Writing the words into the steps…'); await writeTake(t); } }] : []),
         { label: 'Rename', icon: 'edit', onClick: async () => { const v = await ask({ title: 'Rename take', value: t.name }); if (v) { t.name = v; await db.put('recordings', t); loadTakes(); } } },
         { label: 'Download', icon: 'download', onClick: () => download(name, t.blob) },
       ];
@@ -1687,22 +1969,39 @@
       if (nowCell) nowCell.classList.remove('now');
       nowCell = null;
       $$('#seq .st.ph').forEach((x) => x.classList.remove('ph'));
+      $$('#struct .sseg.on').forEach((x) => x.classList.remove('on'));
       $$('#mb i').forEach((x) => x.classList.remove('on'));
     }
+    /** Light up step k of sheet row `line` (the playhead). */
+    function showStep(line, k) {
+      if (line !== nowLine) setNowLine(line);
+      nowStep = k;
+      const blk = blkEl(line);
+      const cell = blk && blk.querySelectorAll('.cell')[k];
+      if (nowCell && nowCell !== cell) nowCell.classList.remove('now');
+      if (cell) cell.classList.add('now');
+      nowCell = cell;
+    }
     function onTick(b, k) {
+      if (b < 0) {
+        // count-in: the Rec button counts the beats down
+        if (counting && k % 4 === 0) { const l = $('#rlabel'); if (l) l.textContent = String(4 - k / 4); }
+        return;
+      }
+      if (counting) counting = false;
       if (T.drums) {
         const seq = barLines(f);
-        const line = seq.length ? seq[b % seq.length] : -1;
-        if (line !== nowLine) setNowLine(line);
-        nowStep = k;
-        const blk = blkEl(line);
-        const cell = blk && blk.querySelectorAll('.cell')[k];
-        if (nowCell && nowCell !== cell) nowCell.classList.remove('now');
-        if (cell) cell.classList.add('now');
-        nowCell = cell;
+        showStep(seq.length ? seq[b % seq.length] : -1, k);
         if (S.panel === 'beat') {
           $$('#seq .st.ph').forEach((x) => x.classList.remove('ph'));
           $$(`#seq .st[data-k="${k}"]`).forEach((x) => x.classList.add('ph'));
+          const tk = trackReady();
+          if (k === 0 && tk && tk.rec.sections) {
+            // light up the beat section that's playing
+            let p = b % tk.rec.bars, i = 0;
+            for (const s of tk.rec.sections) { if (p < s.bars) break; p -= s.bars; i++; }
+            $$('#struct .sseg').forEach((x, j) => x.classList.toggle('on', j === i));
+          }
         }
       }
       if (k % E.spb === 0) {
@@ -1712,24 +2011,44 @@
         if (pill) { pill.classList.add('tick'); setTimeout(() => pill.classList.remove('tick'), 100); }
       }
     }
-    function startTransport() {
+    /** The song's transport: drum patterns per bar, plus the imported beat looping on bar lines. */
+    function transportCfg(drums) {
       const { n, spb } = sig();
-      const drums = T.drums;
-      E.spb = drums ? 4 : spb;
-      audio.play({
+      const tk = drums && trackReady();
+      return {
         kind: 'song', bpm: f.bpm, swing: drums ? f.swing : 0, click: T.click, accent: S.settings.accent,
-        stepsPerBeat: E.spb, stepsPerBar: drums ? 16 : n * spb,
-        getBar: drums ? (b) => { const seq = barLines(f); return barSteps(f, seq.length ? seq[b % seq.length] : -1); } : null,
+        stepsPerBeat: drums ? 4 : spb, stepsPerBar: drums ? 16 : n * spb,
+        getBar: drums && !(tk && !f.track.drums) ? (b) => { const seq = barLines(f); return barSteps(f, seq.length ? seq[b % seq.length] : -1); } : null,
+        beat: tk ? (b, k, t) => {
+          if (k === 0 && b % tk.rec.bars === 0) audio.loopAt(t, { buffer: tk.buf, offset: tk.rec.offset, bars: tk.rec.bars, bpm: f.bpm, rate: f.bpm / tk.rec.bpm });
+        } : null,
         onStep: onTick,
         onStop: () => { clearNow(); },
-      });
+      };
+    }
+    function startTransport(countIn = 0) {
+      const cfg = transportCfg(T.drums);
+      E.spb = cfg.stepsPerBeat;
+      audio.play({ ...cfg, countIn });
     }
     /** Apply T to the audio engine. restart = the bar structure changed. */
-    function syncTransport(restart) {
+    function syncTransport(restart, countIn) {
+      if (audio.state().kind === 'take') stopPlayer();
       if (!T.drums && !T.click) audio.stop();
       else if (audio.state().playing && !restart) audio.update({ click: T.click, accent: S.settings.accent });
-      else startTransport();
+      else startTransport(countIn);
       updateTransportUI();
+    }
+
+    // ----- imported beat ("track"): an audio loop that replaces or layers over the drums -----
+    const tracks = new Map(); // beat id → { rec, buf }
+    const trackReady = () => (f.track && tracks.get(f.track.id)) || null;
+    async function loadTrack() {
+      if (!f.track || tracks.has(f.track.id)) return;
+      const rec0 = await db.get('beats', f.track.id);
+      if (!rec0) { delete f.track; saveSoon('files', f); return; }
+      try { tracks.set(rec0.id, { rec: rec0, buf: await audio.decode(rec0.blob) }); } catch (e) { toast('Couldn’t load this song’s beat'); }
+      if (!gone) { paintAll(); if (S.panel === 'beat') PBeat(); }
     }
     function updateTransportUI() {
       const pb = $('#dplay');
@@ -1747,6 +2066,7 @@
       if (mp) mp.textContent = T.click ? 'Stop click' : 'Start click';
     }
     VA.dplay = () => {
+      stopPlayer();
       T.drums = !T.drums;
       autoDrums = false;
       syncTransport(true);
@@ -1754,11 +2074,13 @@
 
     E = { f, spb: 4, syncTransport, updateTransportUI };
     S.lex = () => paintAll();
+    loadTrack();
     const onResize = () => placeInput();
     window.addEventListener('resize', onResize);
     onLeave(() => {
       gone = true;
       dragEnd(false);
+      document.removeEventListener('keydown', onUndoKey);
       document.removeEventListener('pointermove', onDragMove);
       document.removeEventListener('pointerup', onDragUp);
       document.removeEventListener('pointercancel', onDragUp);
@@ -1766,7 +2088,6 @@
       T.drums = T.click = false;
       audio.stop();
       stopPlayer();
-      urls.forEach((u) => URL.revokeObjectURL(u));
       ro.disconnect();
       window.removeEventListener('resize', onResize);
       clearTimeout(stripT);
@@ -1838,10 +2159,10 @@
       title: 'Settings',
       html: `<div class="set-row"><div class="lbl">Theme</div><div class="seg" id="thm">${['dark', 'light', 'system'].map((t) => `<button data-t="${t}" class="${S.settings.theme === t ? 'on' : ''}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</div></div>
         <label class="set-row"><div><div class="lbl">Online dictionary</div><div class="sub">Exact syllables, stresses, rhymes and associations from Datamuse. Off keeps everything on-device.</div></div><input type="checkbox" class="switch" id="onl" ${S.settings.online ? 'checked' : ''}></label>
-        <button class="menu-i" id="exp">${icon('download')}<span>Export backup</span><small>Lyrics, folders, beats</small></button>
+        <button class="menu-i" id="exp">${icon('download')}<span>Export backup</span><small>${S.settings.lastBackup ? `Last: ${ago(S.settings.lastBackup)}` : 'Never backed up'}</small></button>
         <button class="menu-i" id="imp">${icon('upload')}<span>Import backup</span></button>
         <input type="file" id="impf" accept="application/json,.json" hidden>
-        <p class="src">Everything stays on this device · ${syl.lexiconSize()} words in the pronunciation cache</p>`,
+        <p class="src">Everything stays on this device${persisted ? ', protected from automatic clearing' : ' — the browser may clear it if space runs low, so back up regularly'}. Backups hold lyrics, folders and drum patterns; takes and imported beats stay on the device. · ${syl.lexiconSize()} words in the pronunciation cache</p>`,
     });
     const el = sh.el;
     $('#thm', el).addEventListener('click', (e) => {
@@ -1853,10 +2174,7 @@
       $$('#thm button', el).forEach((x) => x.classList.toggle('on', x === b));
     });
     $('#onl', el).addEventListener('change', (e) => { S.settings.online = e.target.checked; syl.online = e.target.checked; saveSettings(); });
-    $('#exp', el).addEventListener('click', () => {
-      const data = { app: 'FlowPad', version: 1, exported: new Date().toISOString(), projects: S.projects, folders: S.folders, files: S.files, patterns: S.patterns };
-      download(`flowpad-backup-${new Date().toISOString().slice(0, 10)}.json`, new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' }));
-    });
+    $('#exp', el).addEventListener('click', () => { exportBackup(); $('#exp small', el).textContent = 'Last: just now'; });
     $('#imp', el).addEventListener('click', () => $('#impf', el).click());
     $('#impf', el).addEventListener('change', async (e) => {
       const fl = e.target.files[0];
@@ -1931,6 +2249,7 @@
     syl.online = S.settings.online;
     applyTheme();
     route();
+    protectStorage(); // in the background: some browsers ask first
     if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
       navigator.serviceWorker.register('sw.js').catch(() => {});
     }

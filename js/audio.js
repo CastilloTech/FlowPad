@@ -108,6 +108,13 @@
   function scheduleStep(c, bar, step, t) {
     tr.log.push({ t, bar, step, n: c.stepsPerBar });
     if (tr.log.length > 40000) tr.log.splice(0, 10000);
+    if (bar < 0) {
+      // count-in bars (numbered -1, -2 …): clicks on the beats only
+      if (step % c.stepsPerBeat === 0) voices.click(t, step === 0);
+      if (c.onStep) setTimeout(() => { if (tr.cfg === c) c.onStep(bar, step); }, Math.max(0, (t - ctx.currentTime) * 1000));
+      return;
+    }
+    if (c.beat) c.beat(bar, step, t); // an imported beat starts its loops on bar lines
     const pat = c.getBar ? c.getBar(bar) : null;
     if (pat) {
       for (const k of ['kick', 'snare', 'clap', 'hat', 'open']) {
@@ -156,9 +163,9 @@
     ensure();
     stop();
     tr.cfg = Object.assign({ stepsPerBeat: 4, stepsPerBar: 16, bars: null, swing: 0 }, cfg);
-    tr.bar = 0; tr.step = 0; tr.ending = false;
+    tr.bar = cfg.startBar != null ? cfg.startBar : -(cfg.countIn || 0); tr.step = 0; tr.ending = false;
     tr.log = []; tr.bpm = tr.cfg.bpm;
-    tr.next = ctx.currentTime + 0.08;
+    tr.next = cfg.startAt && cfg.startAt > ctx.currentTime ? cfg.startAt : ctx.currentTime + 0.08;
     tr.timer = setInterval(tick, 25);
     tick();
     emit();
@@ -169,8 +176,85 @@
     const c = tr.cfg;
     clearInterval(tr.timer);
     tr.cfg = null;
+    stopLoops();
     if (c.onStop) c.onStop();
     emit();
+  }
+
+  // ---------- imported beats: an audio loop started on bar lines ----------
+  const loops = new Set();
+  /**
+   * Play `bars` bars of a loop from time t. opts: { buffer, offset (s into the file where bar 1
+   * starts), bars, bpm (song tempo), rate (song bpm / beat bpm), gain }.
+   */
+  function loopAt(t, o) {
+    const src = ctx.createBufferSource(), g = ctx.createGain();
+    src.buffer = o.buffer;
+    src.playbackRate.value = o.rate || 1;
+    g.gain.value = o.gain ?? 0.9;
+    src.connect(g).connect(ctx.destination); // a finished mix: skip the drum bus compressor
+    src.start(t, Math.max(0, o.offset || 0));
+    src.stop(t + (o.bars * 240) / o.bpm + 0.01);
+    loops.add(src);
+    src.onended = () => loops.delete(src);
+  }
+  function stopLoops() { loops.forEach((s) => { try { s.stop(); } catch (e) { /* already done */ } }); loops.clear(); }
+
+  /** Decode an audio file (Blob) on the shared context. */
+  async function decode(blob) {
+    ensure();
+    const data = await blob.arrayBuffer();
+    return new Promise((res, rej) => ctx.decodeAudioData(data, res, rej));
+  }
+
+  /**
+   * How each bar of a beat sounds, for finding its sections: overall loudness, bass (kick/808)
+   * and brightness (hats, top end), in dB. Bars are cut from `offset` at the beat's tempo.
+   */
+  function barFeatures(buffer, bpm, offset, bars) {
+    const c0 = buffer.getChannelData(0), c1 = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : c0;
+    const rate = buffer.sampleRate, len = (240 / bpm) * rate, out = [];
+    const db = (s, n) => 10 * Math.log10(s / n + 1e-10);
+    const k = 1 - Math.exp((-2 * Math.PI * 150) / (rate / 2)); // ~150 Hz low-pass, reading every other sample
+    let lp = 0, prev = 0;
+    for (let b = 0; b < bars; b++) {
+      const a = Math.floor(offset * rate + b * len), e = Math.min(c0.length, Math.floor(a + len));
+      if (a >= c0.length) break;
+      let s = 0, lo = 0, hi = 0, n = 0;
+      for (let i = a; i < e; i += 2, n++) {
+        const v = (c0[i] + c1[i]) / 2;
+        lp += k * (v - lp);
+        const d = v - prev; prev = v; // first difference: the top end
+        s += v * v; lo += lp * lp; hi += d * d;
+      }
+      out.push({ rms: db(s, n), low: db(lo, n), high: db(hi, n) });
+    }
+    return out;
+  }
+
+  /**
+   * Rough tempo of a beat: autocorrelation of its low-end onset envelope, folded into 70–180 BPM.
+   * Returns null when nothing clear stands out.
+   */
+  function guessBpm(buffer) {
+    const x = buffer.getChannelData(0), rate = buffer.sampleRate, hop = Math.round(rate / 100);
+    const n = Math.min(Math.floor(x.length / hop), 100 * 60); // first minute is plenty
+    const env = new Float32Array(n);
+    let prev = 0, lp = 0;
+    for (let f = 0; f < n; f++) {
+      let s = 0;
+      for (let i = f * hop, e = i + hop; i < e; i++) { lp += 0.05 * (x[i] - lp); s += lp * lp; } // low-pass: kicks
+      const v = Math.log10(s / hop + 1e-9);
+      env[f] = Math.max(0, v - prev); // rises only
+      prev = v;
+    }
+    let best = 0, bestLag = 0;
+    for (let lag = Math.floor(6000 / 180); lag <= Math.ceil(6000 / 70); lag++) {
+      let s = 0;
+      for (let f = lag; f < n; f++) s += env[f] * env[f - lag];
+      if (s > best) { best = s; bestLag = lag; }
+    }
+    return bestLag ? Math.round(6000 / bestLag) : null;
   }
 
   FP.audio = {
@@ -182,6 +266,20 @@
     update(patch) { if (tr.cfg) Object.assign(tr.cfg, patch); if (patch.bpm) tr.bpm = patch.bpm; },
     /** When each step of the last transport run sounded (kept after stop), plus its tempo. */
     timeline: () => ({ log: tr.log.slice(), bpm: tr.bpm }),
+    loopAt: (t, o) => { ensure(); loopAt(t, o); },
+    decode,
+    guessBpm,
+    barFeatures,
+    /** Play a decoded take at audio-clock time t; returns a stop function. */
+    playBuffer(buffer, t, onEnd) {
+      ensure();
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      src.connect(ctx.destination);
+      src.onended = () => onEnd && onEnd();
+      src.start(t);
+      return () => { src.onended = null; try { src.stop(); } catch (e) { /* done */ } };
+    },
     now: () => (ctx ? ctx.currentTime : 0),
     /** Seconds between a sound being scheduled/captured and it being heard/recorded. */
     latency: () => (ctx ? (ctx.outputLatency || 0) + (ctx.baseLatency || 0) : 0),
