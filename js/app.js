@@ -192,7 +192,7 @@
   function applyTheme() {
     const t = S.settings.theme === 'system' ? (mq.matches ? 'light' : 'dark') : S.settings.theme;
     document.documentElement.dataset.theme = t;
-    $('meta[name="theme-color"]').content = t === 'light' ? '#fafaf7' : '#0c0c0e';
+    $('meta[name="theme-color"]').content = t === 'light' ? '#f5f8fd' : '#05070b';
   }
   if (mq.addEventListener) mq.addEventListener('change', applyTheme);
 
@@ -323,7 +323,7 @@
 
   function setTop({ back, title, sub, right = '', brand, onTitle }) {
     const t = brand
-      ? `<div class="tb-title"><span class="brand">Flow<b>Pad</b></span></div>`
+      ? `<div class="tb-title"><span class="brand"><small>LosSoulx</small><span>Flow<b>Pad</b></span></span></div>`
       : `<div class="tb-title ${onTitle ? 'tappable' : ''}" ${onTitle ? 'data-a="title" role="button" aria-label="Rename"' : ''}><div class="tb-t">${esc(title)}</div>${sub ? `<div class="tb-s">${esc(sub)}</div>` : ''}</div>`;
     topbar.innerHTML = `${back ? `<button class="icon-btn" data-go="${back}" aria-label="Back">${icon('back')}</button>` : ''}${t}<div class="tb-r">${right}</div>`;
     if (onTitle) VA.title = onTitle;

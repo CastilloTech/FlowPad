@@ -1,5 +1,5 @@
 /* FlowPad service worker — offline app shell. Bump VERSION when files change. */
-const VERSION = 'flowpad-v4';
+const VERSION = 'flowpad-v5';
 const SHELL = [
   './', 'index.html', 'css/styles.css', 'js/db.js', 'js/syllables.js', 'js/words.js', 'js/audio.js', 'js/app.js',
   'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',

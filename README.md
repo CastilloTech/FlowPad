@@ -1,4 +1,4 @@
-# FlowPad
+# LosSoulx FlowPad
 
 A minimalist, mobile-first rap writing app. It's an installable web app (PWA) with no build step and no dependencies. Everything is saved on your device.
 
@@ -27,7 +27,7 @@ Each song opens as a **flow sheet**: every bar is a 16-step grid, and you write 
 | **Word bank** | The **Bank** panel explores words associated with a theme. Saved words appear in the strip; tap one to insert it. |
 | **Projects → Folders → Files** | Organise albums, tracks and verses. Rename, move, duplicate, delete, and search across all your lyrics. |
 
-Other details: dark, light and system themes; JSON backup export and import; and `[Verse]` / `Hook:` lines are treated as section labels, not bars.
+Other details: black/blue dark theme, plus light and system themes; JSON backup export and import; and `[Verse]` / `Hook:` lines are treated as section labels, not bars.
 
 ## How the language features work
 

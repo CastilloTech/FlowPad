@@ -1,13 +1,13 @@
 {
-  "name": "FlowPad",
+  "name": "LosSoulx FlowPad",
   "short_name": "FlowPad",
   "description": "A minimalist rap writing pad — syllables, stresses, rhymes, beats and recording.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#0c0c0e",
-  "theme_color": "#0c0c0e",
+  "background_color": "#05070b",
+  "theme_color": "#05070b",
   "icons": [
     { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" },
     { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
