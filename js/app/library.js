@@ -108,6 +108,8 @@ function openSettings() {
     title: 'Settings',
     html: `<div class="set-row"><div class="lbl">Theme</div><div class="seg" id="thm">${['dark', 'light', 'system'].map((t) => `<button data-t="${t}" class="${S.settings.theme === t ? 'on' : ''}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</div></div>
       <label class="set-row"><div><div class="lbl">Online dictionary</div><div class="sub">Exact syllables, stresses, rhymes and associations from Datamuse. Off keeps everything on-device.</div></div><input type="checkbox" class="switch" id="onl" ${S.settings.online ? 'checked' : ''}></label>
+      <label class="set-row"><div><div class="lbl">Soft sounds</div><div class="sub">A quiet tick when a word lands on a step</div></div><input type="checkbox" class="switch" id="snd" ${S.settings.sounds ? 'checked' : ''}></label>
+      ${navigator.vibrate ? `<label class="set-row"><div><div class="lbl">Vibration</div><div class="sub">Tiny taps when you pick up and drop steps</div></div><input type="checkbox" class="switch" id="hap" ${S.settings.haptics !== false ? 'checked' : ''}></label>` : ''}
       <button class="menu-i" id="exp">${icon('download')}<span>Export backup</span><small>${S.settings.lastBackup ? `Last: ${ago(S.settings.lastBackup)}` : 'Never backed up'}</small></button>
       <button class="menu-i" id="imp">${icon('upload')}<span>Import backup</span></button>
       <input type="file" id="impf" accept="application/json,.json" hidden>
@@ -124,6 +126,9 @@ function openSettings() {
     applyTheme();
     $$('#thm button', el).forEach((x) => x.classList.toggle('on', x === b));
   });
+  $('#snd', el).addEventListener('change', (e) => { S.settings.sounds = e.target.checked; saveSettings(); if (e.target.checked) audio.tick(); });
+  const hap = $('#hap', el);
+  if (hap) hap.addEventListener('change', (e) => { S.settings.haptics = e.target.checked; saveSettings(); buzz(10); });
   $('#onl', el).addEventListener('change', (e) => { S.settings.online = e.target.checked; syl.online = e.target.checked; saveSettings(); });
   $('#exp', el).addEventListener('click', () => { exportBackup(); $('#exp small', el).textContent = 'Last: just now'; });
   $('#imp', el).addEventListener('click', () => $('#impf', el).click());

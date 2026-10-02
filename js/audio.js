@@ -88,6 +88,14 @@
       env(g.gain, t, 0.24 * v, 0.002, 0.3);
       n.connect(filter('highpass', 6500)).connect(g).connect(out);
     },
+    /** A soft tick for a word landing on a step. */
+    tick(t) {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = 2200;
+      env(g.gain, t, 0.05, 0.001, 0.03);
+      o.connect(g).connect(out);
+      o.start(t); o.stop(t + 0.05);
+    },
     click(t, accent) {
       const o = ctx.createOscillator(), g = ctx.createGain();
       o.type = 'square';
@@ -100,7 +108,8 @@
 
   // ---------- transport ----------
   // log: when each step actually sounds ({ t, bar, step, n }), so a recording can be mapped back onto the grid
-  const tr = { cfg: null, bar: 0, step: 0, next: 0, timer: null, ending: false, log: [], bpm: 90 };
+  // queue: scheduled steps waiting to be shown — handed to onStep on the display's own frames
+  const tr = { cfg: null, bar: 0, step: 0, next: 0, timer: null, ending: false, log: [], bpm: 90, queue: [], raf: 0 };
   const listeners = new Set();
   const emit = () => listeners.forEach((fn) => fn(state()));
   const state = () => ({ playing: !!tr.cfg, kind: tr.cfg ? tr.cfg.kind : null });
@@ -108,10 +117,10 @@
   function scheduleStep(c, bar, step, t) {
     tr.log.push({ t, bar, step, n: c.stepsPerBar });
     if (tr.log.length > 40000) tr.log.splice(0, 10000);
+    if (c.onStep) tr.queue.push({ t, bar, step });
     if (bar < 0) {
       // count-in bars (numbered -1, -2 …): clicks on the beats only
       if (step % c.stepsPerBeat === 0) voices.click(t, step === 0);
-      if (c.onStep) setTimeout(() => { if (tr.cfg === c) c.onStep(bar, step); }, Math.max(0, (t - ctx.currentTime) * 1000));
       return;
     }
     if (c.beat) c.beat(bar, step, t); // an imported beat starts its loops on bar lines
@@ -124,10 +133,22 @@
     }
     const spb = c.stepsPerBeat;
     if (c.click && step % spb === 0) voices.click(t, c.accent !== false && step === 0);
-    if (c.onStep) {
-      const delay = Math.max(0, (t - ctx.currentTime) * 1000);
-      setTimeout(() => { if (tr.cfg === c) c.onStep(bar, step); }, delay);
+  }
+
+  /**
+   * Show each step when it's heard: on every display frame, hand onStep the steps whose time has
+   * come (allowing for the speaker's delay). Smoother than a timer per step on a busy phone.
+   */
+  function frame() {
+    const c = tr.cfg;
+    if (!c) return;
+    const now = ctx.currentTime - (ctx.outputLatency || 0);
+    if (tr.queue.length > 64) tr.queue.splice(0, tr.queue.length - 16); // back from a background tab
+    while (tr.queue.length && tr.queue[0].t <= now) {
+      const s = tr.queue.shift();
+      if (c.onStep) c.onStep(s.bar, s.step);
     }
+    tr.raf = requestAnimationFrame(frame);
   }
 
   function tick() {
@@ -166,8 +187,10 @@
     tr.bar = cfg.startBar != null ? cfg.startBar : -(cfg.countIn || 0); tr.step = 0; tr.ending = false;
     tr.log = []; tr.bpm = tr.cfg.bpm;
     tr.next = cfg.startAt && cfg.startAt > ctx.currentTime ? cfg.startAt : ctx.currentTime + 0.08;
+    tr.queue = [];
     tr.timer = setInterval(tick, 25);
     tick();
+    tr.raf = requestAnimationFrame(frame);
     emit();
   }
 
@@ -175,6 +198,8 @@
     if (!tr.cfg) return;
     const c = tr.cfg;
     clearInterval(tr.timer);
+    cancelAnimationFrame(tr.raf);
+    tr.queue = [];
     tr.cfg = null;
     stopLoops();
     if (c.onStop) c.onStop();
@@ -263,6 +288,7 @@
     stop,
     state,
     hit(track) { ensure(); voices[track](ctx.currentTime + 0.01); },
+    tick() { ensure(); voices.tick(ctx.currentTime + 0.005); },
     update(patch) { if (tr.cfg) Object.assign(tr.cfg, patch); if (patch.bpm) tr.bpm = patch.bpm; },
     /** When each step of the last transport run sounded (kept after stop), plus its tempo. */
     timeline: () => ({ log: tr.log.slice(), bpm: tr.bpm }),

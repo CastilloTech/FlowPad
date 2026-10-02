@@ -103,7 +103,8 @@ function Editor(id) {
       <ul class="tip-list">
         <li><b>Tap a step</b> and type. <b>Space</b> moves on — longer words split into syllables by themselves.</li>
         <li>Leave steps empty for rests. End a syllable with <b>-</b> to carry a word on (ci- ty).</li>
-        <li><b>Enter</b> starts the next bar. <b>Hold a step</b> to drag it, or let go in place to insert or delete a step.</li>
+        <li><b>Enter</b> starts the next bar. <b>Hold a step</b> to drag it: drop on words to shift them along, or pause on them to replace.</li>
+        <li><b>Swipe a bar</b> left to delete it, right to duplicate it.</li>
       </ul>
       <div class="legend"><span><b>CAPS</b> = stressed</span><span>Grey = unstressed</span><span>Underline = rhyme family</span><span><i class="lg mcl"></i>Shade = rhyme chain <button class="link" data-a="chains" id="chainsb">${S.settings.chains === false ? 'off' : 'on'}</button></span><span><i class="lg k"></i>kick <i class="lg s"></i>snare <i class="lg h"></i>hat</span></div>
     </details>
@@ -277,8 +278,62 @@ function Editor(id) {
   function refitAll() {
     $$('.blk.bar', box).forEach((b) => { b.dataset.fit = ''; fitIO.unobserve(b); fitIO.observe(b); });
   }
-  /** Every change to the sheet goes through here. kind 'type' = typing, which undoes in bursts. */
-  const commit = (kind) => { sync(); record(kind); paintAll(); queueStrip(); };
+  /**
+   * Every change to the sheet goes through here. kind 'type' = typing letters, which undoes in
+   * bursts; anything else (drops, pushes, Space, undo) lets the words glide to where they land.
+   */
+  const commit = (kind) => {
+    const before = kind === 'type' ? null : wordSpots();
+    sync();
+    record(kind);
+    paintAll();
+    glide(before);
+    queueStrip();
+  };
+
+  // ---------------- words glide to their new steps instead of jumping ----------------
+  /** Where each word on screen is now, keyed by its text and which occurrence it is. */
+  function wordSpots() {
+    if (calm()) return null;
+    const spots = new Map(), seen = new Map();
+    for (const b of $$('.blk.bar', box)) {
+      if (!near(b)) continue;
+      for (const ct of b.querySelectorAll('.ct')) {
+        const t = ct.textContent;
+        if (!t) continue;
+        const n = (seen.get(t) || 0) + 1;
+        seen.set(t, n);
+        spots.set(`${t}#${n}`, ct.getBoundingClientRect());
+      }
+    }
+    return spots;
+  }
+  /** Start each moved word at its old spot and let it slide to the new one. */
+  function glide(before) {
+    if (!before || !before.size) return;
+    const seen = new Map(), moves = [];
+    for (const b of $$('.blk.bar', box)) {
+      if (!near(b)) continue;
+      for (const ct of b.querySelectorAll('.ct')) {
+        const t = ct.textContent;
+        if (!t) continue;
+        const n = (seen.get(t) || 0) + 1;
+        seen.set(t, n);
+        const a = before.get(`${t}#${n}`);
+        if (!a) continue;
+        const c = ct.getBoundingClientRect(), dx = a.left - c.left, dy = a.top - c.top;
+        if (Math.abs(dx) + Math.abs(dy) < 2 || Math.abs(dy) > 700) continue;
+        moves.push([ct, dx, dy]);
+      }
+    }
+    if (!moves.length) return;
+    moves.forEach(([ct, dx, dy]) => { ct.parentNode.classList.add('gliding'); ct.style.transition = 'none'; ct.style.transform = `translate(${dx}px, ${dy}px)`; });
+    void box.offsetWidth;
+    moves.forEach(([ct]) => { ct.style.transition = ''; ct.style.transform = ''; });
+    setTimeout(() => moves.forEach(([ct]) => { if (ct.parentNode) ct.parentNode.classList.remove('gliding'); }), 260);
+  }
+  /** A soft tick when a word lands, if sounds are on in Settings. */
+  const sound = () => { if (S.settings.sounds) audio.tick(); };
 
   // ---------------- undo / redo: snapshots of the sheet ----------------
   const hist = { undo: [], redo: [], snap: JSON.stringify(rows), typing: 0 };
@@ -294,12 +349,14 @@ function Editor(id) {
     undoUI();
   }
   function restore(json) {
+    const before = wordSpots();
     rows.splice(0, rows.length, ...JSON.parse(json));
     hist.snap = json;
     hist.typing = 0;
     if (cur && !isBarRow(cur.r)) cur = null;
     sync();
     paintAll();
+    glide(before);
     queueStrip();
     undoUI();
     if (cur && document.activeElement === inp) activate(cur.r, cur.k);
@@ -341,6 +398,9 @@ function Editor(id) {
     meas.textContent = inp.value || 'M';
     const w = Math.min(gr.width, Math.max(cr.width, meas.offsetWidth + 20));
     const left = Math.min(cr.left - gr.left, gr.width - w);
+    // within a bar the box glides to the next step; jumping to another bar it just appears there
+    inp.classList.toggle('glide', !calm() && inp.dataset.r === String(cur.r));
+    inp.dataset.r = cur.r;
     inp.style.cssText = `left:${left}px;top:${cr.top - gr.top}px;width:${w}px;height:${cr.height}px`;
   }
 
@@ -427,6 +487,7 @@ function Editor(id) {
       if (!parts.length) { row.cells[cur.k] = ''; commit(); return step(1); }
       const p = placeWords(cur.r, cur.k, parts);
       commit();
+      sound();
       cur = { r: p.r, k: p.k };
       if (/\s$/.test(v)) step(1); else activate(p.r, p.k);
       return;
@@ -465,80 +526,155 @@ function Editor(id) {
 
   VA.cell = (el) => activate(+el.dataset.r, +el.dataset.k, { select: true }); // typing replaces the step
 
-  // ----- hold a step to drag it onto another; let go where it started for step options -----
-  const drag = { t: 0, from: null, on: false, ghost: null, over: null, raf: 0, x: 0, y: 0, sx: 0, sy: 0, mouse: false, suppress: false };
+  // ----- hold a step to drag it onto another -----
+  // A ring fills while you hold; the step lifts into a label that follows your finger and snaps
+  // onto steps. Over words, they slide along to show the shift you'll get; pause there and it
+  // switches to replace. Let go where you started for the step menu; off the grid cancels.
+  const drag = { t: 0, ringT: 0, from: null, on: false, ghost: null, over: null, raf: 0, x: 0, y: 0, sx: 0, sy: 0, mouse: false, suppress: false, mode: 'move', hold: 0, left: false, moved: [] };
   const cellAt = (x, y) => { const el = document.elementFromPoint(x, y); return el && el.closest('#lines .cell'); };
+  const HOLD_MS = { mouse: 450, touch: 320 };
+  const word = (s) => s.trim().replace(/-$/, '');
 
   function dragStart() {
     const { r, k, el } = drag.from;
+    el.classList.remove('holding');
     drag.on = true;
+    drag.left = false;
     inp.blur();
     inp.hidden = true;
     el.classList.add('lift');
-    if (navigator.vibrate) navigator.vibrate(12);
+    buzz(10);
     const txt = rows[r].cells[k].trim();
     if (txt) {
       drag.ghost = document.createElement('div');
       drag.ghost.className = 'drag-ghost';
-      drag.ghost.textContent = txt.replace(/-$/, '');
+      drag.ghost.innerHTML = '<b></b><span class="gb"></span>';
+      drag.ghost.firstChild.textContent = word(txt);
       document.body.appendChild(drag.ghost);
     }
     dragMove(drag.x, drag.y);
     autoScroll();
   }
+
+  /** Slide the words from step tk of row tr to where a shift would put them (one step later, up to the next rest). */
+  function shiftPreview(tr, tk) {
+    const row = rows[tr], from = drag.from;
+    let j = tk;
+    while (j <= 15 && row.cells[j].trim() && !(tr === from.r && j === from.k)) j++;
+    const cells = blkEl(tr).querySelectorAll('.cell');
+    const next = j > 15 && isBarRow(tr + 1) && blkEl(tr + 1);
+    for (let k = tk; k < Math.min(j, 16); k++) {
+      const dest = k < 15 ? cells[k + 1] : next && next.querySelectorAll('.cell')[0];
+      const ct = cells[k].querySelector('.ct');
+      if (!dest || !ct) continue;
+      const a = cells[k].getBoundingClientRect(), d = dest.getBoundingClientRect();
+      cells[k].classList.add('fly');
+      ct.style.transform = `translate(${d.left - a.left}px, ${d.top - a.top}px)`;
+      drag.moved.push(cells[k]);
+    }
+  }
+  function clearPreview() {
+    drag.moved.forEach((c) => { c.classList.remove('fly'); const ct = c.querySelector('.ct'); if (ct) ct.style.transform = ''; });
+    drag.moved = [];
+    $$('.cell.replace', box).forEach((c) => c.classList.remove('replace'));
+  }
+  function setMode(m) {
+    drag.mode = m;
+    if (drag.ghost) { drag.ghost.dataset.mode = m; drag.ghost.querySelector('.gb').textContent = { shift: 'Shift', replace: 'Replace', move: '' }[m]; }
+  }
+
   function dragMove(x, y) {
     drag.x = x; drag.y = y;
     if (!drag.ghost) return;
-    drag.ghost.style.transform = `translate(${x}px, ${y}px) translate(-50%, -150%)`;
     const c = cellAt(x, y);
+    const target = c && c !== drag.from.el ? c : null;
+    if (target) drag.left = true;
+    // the label snaps above the step it's over, and follows the finger elsewhere
+    if (target) {
+      const r = target.getBoundingClientRect();
+      drag.ghost.classList.add('snap');
+      drag.ghost.style.transform = `translate(${r.left + r.width / 2}px, ${r.top}px) translate(-50%, -112%)`;
+    } else {
+      drag.ghost.classList.remove('snap');
+      drag.ghost.style.transform = `translate(${x}px, ${y}px) translate(-50%, -150%)`;
+    }
     if (c === drag.over) return;
+    clearTimeout(drag.hold);
+    clearPreview();
     if (drag.over) drag.over.classList.remove('drop');
     drag.over = c;
-    if (c && c !== drag.from.el) c.classList.add('drop');
-  }
-  /** Scroll while a step is held near the top bar or the dock. */
-  function autoScroll() {
-    if (!drag.on) return;
-    const top = topbar.getBoundingClientRect().bottom, bot = dock.getBoundingClientRect().top;
-    const d = drag.y < top + 48 ? -12 : drag.y > bot - 48 ? 12 : 0;
-    if (d) { window.scrollBy(0, d); dragMove(drag.x, drag.y); }
-    drag.raf = requestAnimationFrame(autoScroll);
-  }
-  function dragEnd(drop) {
-    clearTimeout(drag.t);
-    cancelAnimationFrame(drag.raf);
-    const { from, over, on } = drag;
-    if (drag.ghost) drag.ghost.remove();
-    if (from) from.el.classList.remove('lift');
-    if (over) over.classList.remove('drop');
-    Object.assign(drag, { t: 0, from: null, on: false, ghost: null, over: null });
-    if (!on || !drop) return;
-    drag.suppress = true; // swallow the click that follows the drop
-    setTimeout(() => { drag.suppress = false; }, 400);
-    const tr = over ? +over.dataset.r : from.r, tk = over ? +over.dataset.k : from.k;
-    if (tr === from.r && tk === from.k) stepMenu(from.r, from.k);
-    else moveStep(from.r, from.k, tr, tk);
+    if (!target) { setMode('move'); return; }
+    target.classList.add('drop');
+    buzz(4);
+    const tr = +target.dataset.r, tk = +target.dataset.k;
+    if (!rows[tr].cells[tk].trim()) { setMode('move'); return; }
+    setMode('shift');
+    shiftPreview(tr, tk);
+    // pause on the words to replace them instead
+    drag.hold = setTimeout(() => {
+      if (drag.over !== target) return;
+      clearPreview();
+      target.classList.add('replace');
+      setMode('replace');
+      buzz(12);
+    }, 650);
   }
 
-  /** Drop a step's words onto another step. Onto words, ask: replace them, or shift them along. */
-  function moveStep(fr, fk, tr, tk) {
+  /** Scroll while a step is held near the top bar or the dock — faster the closer to the edge. */
+  function autoScroll() {
+    if (!drag.on) return;
+    const top = topbar.getBoundingClientRect().bottom, bot = dock.getBoundingClientRect().top, zone = 90;
+    const pull = drag.y < top + zone ? -(top + zone - drag.y) : drag.y > bot - zone ? drag.y - (bot - zone) : 0;
+    if (pull) {
+      window.scrollBy(0, Math.sign(pull) * Math.ceil(26 * Math.min(1, Math.abs(pull) / zone) ** 2));
+      dragMove(drag.x, drag.y);
+    }
+    drag.raf = requestAnimationFrame(autoScroll);
+  }
+
+  /** The label floats back to where it came from. */
+  function flyHome(ghost, el) {
+    if (calm() || !el || !el.isConnected) { ghost.remove(); return; }
+    const r = el.getBoundingClientRect();
+    ghost.classList.remove('snap');
+    ghost.classList.add('home');
+    ghost.style.transform = `translate(${r.left + r.width / 2}px, ${r.top + r.height / 2}px) translate(-50%, -50%) scale(0.6)`;
+    ghost.style.opacity = '0';
+    setTimeout(() => ghost.remove(), 220);
+  }
+
+  function dragEnd(drop) {
+    clearTimeout(drag.t);
+    clearTimeout(drag.ringT);
+    clearTimeout(drag.hold);
+    cancelAnimationFrame(drag.raf);
+    const { from, over, on, ghost, mode, left } = drag;
+    if (from) from.el.classList.remove('holding', 'lift');
+    if (over) over.classList.remove('drop');
+    Object.assign(drag, { t: 0, from: null, on: false, ghost: null, over: null, mode: 'move' });
+    if (drag.lexLater) { drag.lexLater = false; setTimeout(paintAll, 0); }
+    if (!on) return;
+    drag.suppress = true; // swallow the click that follows the drop
+    setTimeout(() => { drag.suppress = false; }, 400);
+    const back = !over || (over === from.el && left);
+    if (!drop || back) { clearPreview(); if (ghost) flyHome(ghost, from.el); return; } // cancelled
+    if (ghost) ghost.remove();
+    if (over === from.el) { clearPreview(); stepMenu(from.r, from.k); return; }
+    moveStep(from.r, from.k, +over.dataset.r, +over.dataset.k, mode);
+  }
+
+  /** Drop a step's words onto another: onto a rest it moves; onto words it shifts them along or replaces them. */
+  function moveStep(fr, fk, tr, tk, mode) {
     const text = rows[fr].cells[fk];
-    if (!text.trim()) return;
+    if (!text.trim()) { clearPreview(); return; }
     const there = rows[tr].cells[tk].trim();
-    const done = (shift) => {
-      SH.moveStep(rows, fr, fk, tr, tk, shift, onInsert); // shift: the words from there on move one step later
-      commit();
-      activate(tr, tk, { focus: false });
-    };
-    if (!there) return done(false);
-    const show = (s) => `“${s.trim().replace(/-$/, '')}”`;
-    sheet({
-      title: `Drop ${show(text)} on ${show(there)}`,
-      items: [
-        { label: 'Replace', icon: 'edit', hint: `${show(there)} is removed`, onClick: () => done(false) },
-        { label: 'Shift words along', icon: 'move', hint: `${show(there)} and the words after it move one step later`, onClick: () => done(true) },
-      ],
-    });
+    SH.moveStep(rows, fr, fk, tr, tk, mode === 'shift', onInsert);
+    commit(); // the previewed words glide from where they are to where they land
+    clearPreview();
+    activate(tr, tk, { focus: false });
+    buzz(12);
+    sound();
+    if (mode === 'replace' && there) toast(`Replaced “${word(there)}”`, { label: 'Undo', fn: undo });
   }
 
   function stepMenu(r, k) {
@@ -549,7 +685,7 @@ function Editor(id) {
       items: [
         { label: 'Insert a rest here', icon: 'plus', hint: 'Pushes the words from here one step later', onClick: () => { pushAt(r, k); commit(); } },
         { label: 'Delete this step', icon: 'minus', hint: 'Pulls the words after it one step earlier', onClick: () => { pullAt(row, k); commit(); } },
-        ...(row.cells[k].trim() ? [{ label: 'Clear step', icon: 'x', onClick: () => { row.cells[k] = ''; commit(); } }] : []),
+        ...(row.cells[k].trim() ? [{ label: 'Clear step', icon: 'x', onClick: () => { const w = row.cells[k]; row.cells[k] = ''; commit(); toast(`Cleared “${word(w)}”`, { label: 'Undo', fn: undo }); } }] : []),
       ],
     });
   }
@@ -562,14 +698,18 @@ function Editor(id) {
     drag.x = drag.sx = e.clientX;
     drag.y = drag.sy = e.clientY;
     drag.mouse = e.pointerType === 'mouse';
-    drag.t = setTimeout(dragStart, drag.mouse ? 450 : 320);
+    const ms = drag.mouse ? HOLD_MS.mouse : HOLD_MS.touch;
+    // a ring fills while you hold (it starts just past a tap's length, so taps don't flash it)
+    c.style.setProperty('--hold', `${ms - 120}ms`);
+    drag.ringT = setTimeout(() => { if (drag.from && drag.from.el === c && !drag.on) c.classList.add('holding'); }, 120);
+    drag.t = setTimeout(dragStart, ms);
   });
   const onDragMove = (e) => {
     if (!drag.from) return;
     if (drag.on) { e.preventDefault(); dragMove(e.clientX, e.clientY); return; }
     const moved = Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy);
-    if (drag.mouse && moved > 6 && rows[drag.from.r].cells[drag.from.k].trim()) { clearTimeout(drag.t); drag.x = e.clientX; drag.y = e.clientY; dragStart(); }
-    else if (!drag.mouse && moved > 10) dragEnd(false); // a scroll, not a hold
+    if (drag.mouse && moved > 6 && rows[drag.from.r].cells[drag.from.k].trim()) { clearTimeout(drag.t); clearTimeout(drag.ringT); drag.x = e.clientX; drag.y = e.clientY; dragStart(); }
+    else if (!drag.mouse && moved > 10) dragEnd(false); // a scroll or a swipe, not a hold
   };
   const onDragUp = (e) => dragEnd(e.type === 'pointerup');
   document.addEventListener('pointermove', onDragMove);
@@ -578,6 +718,64 @@ function Editor(id) {
   box.addEventListener('touchmove', (e) => { if (drag.on) e.preventDefault(); }, { passive: false }); // hold the page still while dragging
   box.addEventListener('contextmenu', (e) => { if (e.target.closest('.cell')) e.preventDefault(); });
   box.addEventListener('click', (e) => { if (drag.suppress) { drag.suppress = false; e.stopPropagation(); e.preventDefault(); } }, true);
+
+  // ----- swipe a bar: left to delete, right to duplicate (Undo in the message) -----
+  const sw = { el: null, x0: 0, y0: 0, dx: 0, on: false, dead: false, armed: false };
+  box.addEventListener('touchstart', (e) => {
+    const b = e.target.closest('.blk.bar');
+    if (!b || e.touches.length > 1) { sw.el = null; return; }
+    Object.assign(sw, { el: b, x0: e.touches[0].clientX, y0: e.touches[0].clientY, dx: 0, on: false, dead: false, armed: false });
+  }, { passive: true });
+  box.addEventListener('touchmove', (e) => {
+    if (!sw.el || sw.dead || drag.on) return;
+    const dx = e.touches[0].clientX - sw.x0, dy = e.touches[0].clientY - sw.y0;
+    if (!sw.on) {
+      if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { sw.dead = true; return; } // a scroll
+      if (Math.abs(dx) < 16 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+      sw.on = true;
+      dragEnd(false);
+      sw.el.classList.add('swiping');
+    }
+    e.preventDefault();
+    sw.dx = dx;
+    const p = Math.min(1, Math.abs(dx) / (sw.el.offsetWidth * 0.35));
+    sw.el.dataset.swipe = dx < 0 ? 'del' : 'dup';
+    sw.el.style.setProperty('--sw', p.toFixed(2));
+    sw.el.style.transform = `translateX(${dx}px)`;
+    if (p >= 1 && !sw.armed) { sw.armed = true; buzz(10); } else if (p < 1) sw.armed = false;
+  }, { passive: false });
+  const swipeEnd = () => {
+    const { el, on, armed, dx } = sw;
+    sw.el = null;
+    if (!el || !on) return;
+    drag.suppress = true;
+    setTimeout(() => { drag.suppress = false; }, 300);
+    const r = +el.dataset.r;
+    const settle = () => { el.classList.remove('swiping'); el.style.transform = ''; delete el.dataset.swipe; };
+    el.classList.add('spring');
+    setTimeout(() => el.classList.remove('spring'), 240);
+    if (!armed) { settle(); return; }
+    if (dx < 0) {
+      // slide away, then delete
+      el.style.transform = `translateX(${-el.offsetWidth * 1.1}px)`;
+      setTimeout(() => {
+        const n = rows.filter((x) => x.type === 'bar').length;
+        if (n <= 1) rows[r].cells = newBarRow().cells;
+        else { rows.splice(r, 1); if (cur && cur.r === r) cur = null; else if (cur && cur.r > r) cur.r--; if (nowLine > r) nowLine--; }
+        commit();
+        toast(n <= 1 ? 'Bar cleared' : 'Bar deleted', { label: 'Undo', fn: undo });
+      }, calm() ? 0 : 180);
+    } else {
+      settle();
+      rows.splice(r + 1, 0, JSON.parse(JSON.stringify(rows[r])));
+      if (cur && cur.r > r) cur.r++;
+      if (nowLine > r) nowLine++;
+      commit();
+      toast('Bar duplicated', { label: 'Undo', fn: undo });
+    }
+  };
+  box.addEventListener('touchend', swipeEnd);
+  box.addEventListener('touchcancel', swipeEnd);
   VA['bar-go'] = (el) => { const r = +el.dataset.r; activate(r, Math.min(15, lastFilled(r) + 1)); };
   VA['add-bar'] = () => activate(insertBar(rows.length), 0);
   VA['add-sec'] = async () => {
@@ -644,6 +842,7 @@ function Editor(id) {
       p = placeWords(at.r, at.k, [w], false);
     }
     commit();
+    sound();
     activate(p.r, Math.min(15, p.k + 1), { focus: document.activeElement === inp });
   }
 
@@ -731,13 +930,25 @@ function Editor(id) {
     setTimeout(ensureVisible, 30);
   }
   function renderPanel() {
-    panel.hidden = !S.panel;
+    if (!S.panel) {
+      // closing: let it drop away first (opening slides up by itself, in the CSS)
+      if (panel.hidden || calm()) { panel.hidden = true; panel.innerHTML = ''; return; }
+      panel.classList.add('out');
+      setTimeout(() => { panel.classList.remove('out'); if (!S.panel) { panel.hidden = true; panel.innerHTML = ''; } }, 150);
+      return;
+    }
+    panel.classList.remove('out');
+    panel.hidden = false;
     panel.scrollTop = 0;
-    if (!S.panel) { panel.innerHTML = ''; return; }
     ({ rhymes: PRhymes, beat: PBeat, takes: PTakes, bank: PBank })[S.panel]();
   }
   VA.panel = (el) => togglePanel(el.dataset.v);
   VA.pclose = () => togglePanel(S.panel);
+  // swipe a panel down by its header (or anywhere once it's scrolled to the top) to close it
+  swipeDown(panel, {
+    canStart: (e) => !!e.target.closest('.ph') || panel.scrollTop <= 0,
+    onClose: () => { panel.style.transform = ''; if (S.panel) togglePanel(S.panel); },
+  });
 
   // ----- Rhymes panel: follows the line you're writing unless you search -----
   const rhy = { q: '', kind: 'perfect', follow: true, req: 0 };
@@ -860,7 +1071,8 @@ function Editor(id) {
 
 
   E = { f, spb: 4, syncTransport, updateTransportUI };
-  S.lex = () => paintAll();
+  // new pronunciations repaint the sheet — but not mid-drag, which would pull the steps out from under it
+  S.lex = () => { if (drag.on) drag.lexLater = true; else paintAll(); };
   loadTrack();
   const onResize = () => placeInput();
   window.addEventListener('resize', onResize);

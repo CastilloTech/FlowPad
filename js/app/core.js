@@ -180,14 +180,64 @@ function applyTheme() {
 }
 if (mq.addEventListener) mq.addEventListener('change', applyTheme);
 
-// ---------- toast ----------
+// ---------- feel: motion, haptics ----------
+/** The phone asks for less motion: skip the glides and slides. */
+const calm = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+/** A tiny tap on phones that can vibrate (Android — iPhones don't let websites vibrate). */
+const buzz = (ms = 8) => { try { if (navigator.vibrate && S.settings.haptics !== false) navigator.vibrate(ms); } catch (e) { /* not allowed */ } };
+
+// ---------- toast (optionally with one action, e.g. Undo) ----------
 let toastT = 0;
-function toast(msg) {
+function toast(msg, action) {
   const t = $('#toast');
-  t.textContent = msg;
+  t.textContent = '';
+  t.append(msg);
+  if (action) {
+    const b = document.createElement('button');
+    b.className = 'toast-act';
+    b.textContent = action.label;
+    b.addEventListener('click', () => { t.classList.remove('show'); action.fn(); });
+    t.append(b);
+  }
+  t.classList.toggle('has-act', !!action);
   t.classList.add('show');
   clearTimeout(toastT);
-  toastT = setTimeout(() => t.classList.remove('show'), 1900);
+  toastT = setTimeout(() => t.classList.remove('show'), action ? 4500 : 1900);
+}
+
+/**
+ * Swipe down to close a sheet or panel. Touch only (a mouse has the close button). Starts when
+ * the finger pulls down and `canStart` agrees (e.g. the content is scrolled to the top); the
+ * element follows the finger, and a long or quick pull closes it, otherwise it springs back.
+ */
+function swipeDown(el, { onClose, canStart = () => true, base = '' }) {
+  let y0 = 0, x0 = 0, dy = 0, t0 = 0, on = false, dead = false;
+  el.addEventListener('touchstart', (e) => {
+    if (e.touches.length > 1 || e.target.closest('input, textarea, select, .range, .seq')) { dead = true; return; }
+    y0 = e.touches[0].clientY; x0 = e.touches[0].clientX; t0 = performance.now(); dy = 0; on = false; dead = false;
+  }, { passive: true });
+  el.addEventListener('touchmove', (e) => {
+    if (dead) return;
+    const d = e.touches[0].clientY - y0, dx = e.touches[0].clientX - x0;
+    if (!on) {
+      if (d < -6 || Math.abs(dx) > Math.abs(d)) { dead = true; return; }
+      if (d < 10 || !canStart(e)) return;
+      on = true;
+      el.style.transition = 'none';
+    }
+    e.preventDefault();
+    dy = Math.max(0, d - 10);
+    el.style.transform = `${base} translateY(${dy}px)`;
+  }, { passive: false });
+  const end = () => {
+    if (!on) return;
+    on = false;
+    const fast = dy / Math.max(1, performance.now() - t0) > 0.5;
+    el.style.transition = '';
+    if (dy > 110 || (fast && dy > 30)) { buzz(6); onClose(); } else el.style.transform = '';
+  };
+  el.addEventListener('touchend', end);
+  el.addEventListener('touchcancel', end);
 }
 
 // ---------- sheets ----------
@@ -225,6 +275,12 @@ function sheet({ title, html = '', items, cls = '', actions = {} }) {
     }
     const a = e.target.closest('[data-a]');
     if (a) { const fn = actions[a.dataset.a] || GA[a.dataset.a]; if (fn) fn(a, e); }
+  });
+  // swipe down from the handle or the title, or anywhere once the content is scrolled to the top
+  swipeDown(api.el, {
+    base: 'translateX(-50%)',
+    canStart: (e) => !!e.target.closest('.grab, .sheet-h') || api.el.scrollTop <= 0,
+    onClose: () => { api.el.style.transform = ''; api.close(); },
   });
   openSheets.push(api);
   return api;
@@ -329,7 +385,16 @@ function route(keepScroll) {
   else if (k === 'e') Editor(id);
   else Home();
   window.scrollTo(0, keepScroll ? y : 0);
+  // slide in from the side you're heading: deeper (home → project → song) from the right
+  const depth = { p: 1, f: 2, e: 3 }[k] || 0;
+  if (!keepScroll && !calm() && depth !== lastDepth) {
+    view.classList.remove('in-fwd', 'in-back');
+    void view.offsetWidth;
+    view.classList.add(depth > lastDepth ? 'in-fwd' : 'in-back');
+  }
+  lastDepth = depth;
 }
+let lastDepth = 0;
 
 window.addEventListener('fp:lexicon', () => { if (S.lex) S.lex(); });
 

@@ -3,7 +3,7 @@
 
 export default [
   {
-    name: 'editing: push across bars, replace / shift drops, undo, print',
+    name: 'editing: push across bars, shift preview, pause to replace, undo, cancel, print',
     async run() {
       const { sleep, bars, steps, cell, type, drag, menu } = E2E;
       const out = {};
@@ -17,25 +17,27 @@ export default [
       cell(bars()[n - 1], 2).click(); await sleep(100);
       await type('yellow ');
       out.afterType = [steps(bars()[n - 1]), steps(bars()[n])];
-      // drag "a" onto "b" → Shift
-      await drag(cell(bars()[n - 1], 0), cell(bars()[n - 1], 1));
-      out.dropOptions = [...document.querySelectorAll('.menu-i span')].map((s) => s.textContent);
-      menu(/Shift/).click(); await sleep(300);
+      // drag "a" onto "b": the words slide along as a preview, and dropping shifts them
+      await drag(cell(bars()[n - 1], 0), cell(bars()[n - 1], 1), {
+        during: async () => { await sleep(80); out.preview = { badge: document.querySelector('.drag-ghost .gb')?.textContent, sliding: document.querySelectorAll('.cell.fly').length }; },
+      });
+      out.noQuestion = !document.querySelector('.sheet-wrap');
       out.afterShift = [steps(bars()[n - 1]), steps(bars()[n])];
-      // drag "yel-" onto "n" → Replace
+      // drag "yel-" onto "n" and pause there: replace
       const L = bars()[n - 1], ks = [...L.querySelectorAll('.ct')].map((c) => c.textContent);
-      await drag(cell(L, ks.indexOf('yel-')), cell(L, ks.indexOf('n')));
-      menu(/Replace/).click(); await sleep(300);
+      await drag(cell(L, ks.indexOf('yel-')), cell(L, ks.indexOf('n')), {
+        during: async () => { await sleep(800); out.pausedBadge = document.querySelector('.drag-ghost .gb')?.textContent; },
+      });
       out.afterReplace = steps(bars()[n - 1]);
-      // closing the choice cancels the move
-      await drag(cell(bars()[n - 1], 1), cell(bars()[n - 1], 2));
-      document.querySelector('.scrim').click(); await sleep(300);
-      out.afterCancel = steps(bars()[n - 1]);
-      // undo the replace, then redo it
-      document.querySelector('#bundo').click(); await sleep(200);
+      out.toast = document.querySelector('#toast').textContent;
+      // the message's Undo puts it back; Ctrl+Shift+Z redoes it
+      E2E.toastAct().click(); await sleep(250);
       out.undone = steps(bars()[n - 1]);
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true })); await sleep(200);
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true })); await sleep(250);
       out.redone = steps(bars()[n - 1]);
+      // dropping off the grid cancels
+      await drag(cell(bars()[n - 1], 1), document.querySelector('#stat'));
+      out.afterCancel = steps(bars()[n - 1]);
       // print sheet
       window.print = () => { window.__printed = true; };
       document.querySelector('[data-a="fmenu"]').click(); await sleep(300);
@@ -46,12 +48,15 @@ export default [
     check(r, assert) {
       assert.equal(r.full, 'a b c d e f g h i j k l m n o p');
       assert.deepEqual(r.afterType, ['a b yel- low d e f g h i j k l m n o', 'p · · · · · · · · · · · · · · ·']);
-      assert.deepEqual(r.dropOptions, ['Replace', 'Shift words along']);
+      assert.deepEqual(r.preview, { badge: 'Shift', sliding: 15 });
+      assert.ok(r.noQuestion, 'a drop no longer asks');
       assert.deepEqual(r.afterShift, ['· a b yel- low d e f g h i j k l m n', 'o p · · · · · · · · · · · · · ·']);
+      assert.equal(r.pausedBadge, 'Replace');
       assert.equal(r.afterReplace, '· a b · low d e f g h i j k l m yel-');
-      assert.equal(r.afterCancel, r.afterReplace);
+      assert.match(r.toast, /^Replaced “n”Undo$/);
       assert.equal(r.undone, '· a b yel- low d e f g h i j k l m n');
       assert.equal(r.redone, r.afterReplace);
+      assert.equal(r.afterCancel, r.afterReplace);
       assert.deepEqual(r.print, { called: true, title: 'Late Night', bold: 'LATE' });
     },
   },
@@ -294,6 +299,50 @@ export default [
       assert.ok(r.goneAfterInstall);
       assert.deepEqual(r.links, ['Privacy → privacy.html', 'Send feedback → https://github.com/CastilloTech/FlowPad/issues/new']);
       assert.ok(r.privacy);
+    },
+  },
+
+  {
+    name: 'gestures: swipe a bar to delete / duplicate, swipe sheets and panels closed',
+    async run() {
+      const { sleep, bars, steps, swipe } = E2E;
+      document.querySelector('.row').click(); await sleep(500);
+      const out = { bars: bars().length };
+      const second = steps(bars()[1]);
+      // swipe bar 2 left: deleted, with Undo in the message
+      await swipe(bars()[1].querySelector('.bline'), -260, 0, 8, () => { out.widthMidSwipe = document.documentElement.scrollWidth; });
+      out.afterDelete = bars().length;
+      out.deleteToast = document.querySelector('#toast').textContent;
+      E2E.toastAct().click(); await sleep(300);
+      out.restored = steps(bars()[1]) === second && bars().length === out.bars;
+      // swipe it right: duplicated
+      await swipe(bars()[1].querySelector('.bline'), 260, 0);
+      out.afterDup = bars().length;
+      out.dupSame = steps(bars()[2]) === second;
+      // a short swipe springs back
+      await swipe(bars()[1].querySelector('.bline'), -40, 0);
+      out.afterShort = bars().length;
+      // a sheet swiped down by its title closes
+      document.querySelector('[data-a="fmenu"]').click(); await sleep(350);
+      await swipe(document.querySelector('.sheet-h'), 0, 220);
+      out.sheetClosed = !document.querySelector('.sheet-wrap.open');
+      // a panel swiped down by its header closes
+      E2E.dock(/Bank/).click(); await sleep(350);
+      await swipe(document.querySelector('#panel .ph'), 0, 200);
+      await sleep(250);
+      out.panelClosed = document.querySelector('#panel').hidden;
+      return out;
+    },
+    check(r, assert) {
+      assert.equal(r.widthMidSwipe, 390, 'a bar mid-swipe must not widen the page');
+      assert.equal(r.afterDelete, r.bars - 1);
+      assert.equal(r.deleteToast, 'Bar deletedUndo');
+      assert.ok(r.restored, 'Undo brings the bar back');
+      assert.equal(r.afterDup, r.bars + 1);
+      assert.ok(r.dupSame);
+      assert.equal(r.afterShort, r.afterDup);
+      assert.ok(r.sheetClosed);
+      assert.ok(r.panelClosed);
     },
   },
 
