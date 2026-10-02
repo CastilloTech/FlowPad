@@ -314,7 +314,7 @@ mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px;
 .bline { font: 400 17px/1.5 var(--font); min-height: 26px; padding: 0 0 2px; cursor: text; }
 .bline .ph-t2 { color: var(--faint); font-size: 14px; }
 .bline .s0 { color: var(--muted); }
-.bline .s1 { color: var(--accent); text-shadow: 0 0 0.6px currentColor; }
+.bline .s1 { color: var(--accent); text-shadow: 0 0 0.6px currentColor; text-transform: uppercase; }
 .bline .s2 { color: var(--text); }
 .bline .w[data-r] { text-decoration-line: underline; text-decoration-thickness: 2px; text-underline-offset: 5px; }
 .w[data-r="0"] { text-decoration-color: var(--r0); } .w[data-r="1"] { text-decoration-color: var(--r1); } .w[data-r="2"] { text-decoration-color: var(--r2); }
@@ -325,7 +325,7 @@ mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px;
 .cell.act { box-shadow: inset 0 0 0 2px var(--accent); }
 .cell .ct { position: absolute; left: 2px; right: 2px; bottom: 5px; text-align: center; font-size: 12px; line-height: 1.1; white-space: nowrap; overflow: hidden; color: var(--text); font-weight: 500; }
 .ct.s0 { color: var(--muted); }
-.ct.s1 { color: var(--accent); font-weight: 750; }
+.ct.s1 { color: var(--accent); font-weight: 750; text-transform: uppercase; letter-spacing: -0.02em; }
 .ct.s2 { font-weight: 650; }
 .ct .hy { font-style: normal; color: var(--faint); }
 .cin {
@@ -383,7 +383,7 @@ mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px;
 .dr .h { background: var(--faint); width: 4px !important; height: 4px !important; margin-top: 1px; }
 .cell .sy-w { position: absolute; left: 2px; right: 2px; bottom: 5px; text-align: center; font-size: 11px; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: clip; }
 .cell .sy-w b { font-weight: 500; }
-.cell .sy-w b.s1 { color: var(--accent); font-weight: 750; }
+.cell .sy-w b.s1 { color: var(--accent); font-weight: 750; text-transform: uppercase; }
 .cell .sy-w b.s2 { font-weight: 650; }
 .cell .sy-w b.s0 { color: var(--muted); }
 .flow-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; justify-content: center; font-size: 12px; color: var(--muted); margin-top: 8px; }

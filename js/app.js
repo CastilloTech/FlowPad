@@ -153,6 +153,19 @@
 
   /** Lay a lyric line across 16 steps: 'even' spreads it over the bar, 'pack' puts one syllable per step. */
   function spreadCells(text, mode = 'even') {
+    const flat = sylPieces(text);
+    const cells = range(16).map(() => []);
+    flat.forEach((s, j) => cells[mode === 'pack' ? Math.min(15, j) : Math.min(15, Math.floor((j * 16) / flat.length))].push(s));
+    return cells.map((L) => {
+      if (!L.length) return '';
+      let out = '';
+      L.forEach((s, i) => { out += s.t; if (i < L.length - 1 && s.end) out += ' '; });
+      return L[L.length - 1].end ? out : `${out}-`;
+    });
+  }
+
+  /** A line as its syllables in order: { t, end } where `end` marks the last syllable of a word. */
+  function sylPieces(text) {
     const flat = [];
     let lead = '';
     const toks = syl.analyzeLine(text).tokens;
@@ -169,14 +182,18 @@
         if (m[3]) lead += m[3].replace(/\s+/g, '');
       }
     });
-    const cells = range(16).map(() => []);
-    flat.forEach((s, j) => cells[mode === 'pack' ? Math.min(15, j) : Math.min(15, Math.floor((j * 16) / flat.length))].push(s));
-    return cells.map((L) => {
-      if (!L.length) return '';
-      let out = '';
-      L.forEach((s, i) => { out += s.t; if (i < L.length - 1 && s.end) out += ' '; });
-      return L[L.length - 1].end ? out : `${out}-`;
-    });
+    return flat;
+  }
+
+  /**
+   * One typed word → its steps, one syllable each ("syllable" → "syl-", "la-", "ble").
+   * A word the writer already broke with "-" stays as typed.
+   */
+  function wordSteps(word) {
+    if (/-$/.test(word)) return [word];
+    const flat = sylPieces(word);
+    if (flat.length < 2) return [word];
+    return flat.map((s) => (s.end ? s.t : `${s.t}-`));
   }
 
   function textToSheet(text, bars = {}) {
@@ -722,7 +739,7 @@
       </div>
       <div class="sheet-add"><button class="btn" data-a="add-bar">${icon('plus', 'sm')}Bar</button><button class="btn" data-a="add-sec">${icon('plus', 'sm')}Section</button></div>
       <p class="hint">Tap a step and type. <b>Space</b> moves to the next step, leave steps empty for rests, end a syllable with <b>-</b> to carry the word on (ci- ty), <b>Enter</b> starts the next bar.</p>
-      <div class="legend"><span><b>Bright</b> = stressed</span><span>Grey = unstressed</span><span>Underline = rhyme family</span><span><i class="lg k"></i>kick <i class="lg s"></i>snare <i class="lg h"></i>hat</span></div>
+      <div class="legend"><span><b>CAPS</b> = stressed</span><span>Grey = unstressed</span><span>Underline = rhyme family</span><span><i class="lg k"></i>kick <i class="lg s"></i>snare <i class="lg h"></i>hat</span></div>
     </div>`;
     dock.hidden = false;
     dock.innerHTML = `<div class="panel" id="panel" hidden></div>
@@ -801,7 +818,18 @@
       }).join('');
       $('#stat').textContent = n ? `${plural(n, 'bar')} · ${total} syl · avg ${Math.round(total / n)}` : 'Add a bar to start';
       nowCell = null;
+      fitSteps();
       placeInput();
+    }
+
+    /** Shrink step text that doesn't fit its cell (CAPS syllables on narrow phones). Reads first, then writes. */
+    function fitSteps() {
+      const cts = $$('.ct', box).filter((c) => c.textContent);
+      cts.forEach((c) => { c.style.fontSize = ''; });
+      const base = cts.length ? parseFloat(getComputedStyle(cts[0]).fontSize) : 12;
+      cts.map((c) => [c, c.clientWidth / c.scrollWidth])
+        .filter(([, r]) => r < 1)
+        .forEach(([c, r]) => { c.style.fontSize = `${Math.max(8, Math.floor(base * r * 10) / 10)}px`; });
     }
     const commit = () => { sync(); paintAll(); queueStrip(); };
 
@@ -883,19 +911,36 @@
       activate(p, lf < 0 ? 0 : lf);
     }
 
+    /**
+     * Write words from step k on: each word starts a step and its syllables flow into the
+     * following steps — only empty ones, so nothing already written is overwritten.
+     * Returns the last step used.
+     */
+    function placeWords(row, k, words) {
+      words.forEach((w, idx) => {
+        if (idx > 0) k++;
+        if (k > 15) { k = 15; row.cells[15] = `${row.cells[15]} ${w}`.trim(); return; }
+        const segs = wordSteps(w);
+        let j = 0;
+        while (j < segs.length - 1 && k < 15 && !(row.cells[k + 1] || '').trim()) {
+          row.cells[k] = segs[j++];
+          k++;
+        }
+        row.cells[k] = segs.slice(j).join(' ').replace(/(\S)- /g, '$1'); // no room left: rest stays together
+      });
+      return k;
+    }
+
     inp.addEventListener('input', () => {
       if (!cur) return;
       const row = rows[cur.r];
       const v = inp.value;
       if (/\s/.test(v)) {
-        // Space (or pasted words): each word takes the next step.
+        // Space (or pasted words): each word takes the next step, split into syllables.
         const parts = v.split(/\s+/).filter(Boolean);
         let k = cur.k;
         if (!parts.length) { row.cells[k] = ''; commit(); return step(1); }
-        parts.forEach((p, idx) => {
-          if (idx > 0) k++;
-          if (k > 15) { k = 15; row.cells[15] = `${row.cells[15]} ${p}`.trim(); } else row.cells[k] = p;
-        });
+        k = placeWords(row, k, parts);
         commit();
         cur.k = k;
         if (/\s$/.test(v)) step(1); else activate(cur.r, k);
@@ -906,10 +951,17 @@
       commit();
       if (v.length > 1 && v.endsWith('-')) step(1); // syllable continues on the next step
     });
+    /** Enter ends the line: split the word in the current step across the steps after it first. */
+    function endLine() {
+      const row = rows[cur.r], v = (row.cells[cur.k] || '').trim();
+      if (v && !/\s/.test(v) && wordSteps(v).length > 1) { placeWords(row, cur.k, [v]); commit(); }
+      nextBar();
+    }
+
     inp.addEventListener('keydown', (e) => {
       if (!cur) return;
       const s = inp.selectionStart, en = inp.selectionEnd;
-      if (e.key === 'Enter') { e.preventDefault(); nextBar(); }
+      if (e.key === 'Enter') { e.preventDefault(); endLine(); }
       else if (e.key === 'Backspace' && !inp.value) { e.preventDefault(); stepBack(); }
       else if (e.key === 'Tab') { e.preventDefault(); step(e.shiftKey ? -1 : 1); }
       else if (e.key === 'ArrowRight' && s === inp.value.length) { e.preventDefault(); step(1); }
@@ -922,7 +974,7 @@
     inp.addEventListener('beforeinput', (e) => {
       if (!cur) return;
       if (e.inputType === 'deleteContentBackward' && !inp.value) { e.preventDefault(); stepBack(); }
-      else if (e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph') { e.preventDefault(); nextBar(); }
+      else if (e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph') { e.preventDefault(); endLine(); }
     });
     inp.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== inp) inp.hidden = true; }, 0));
 
@@ -974,7 +1026,7 @@
     };
 
     let lastW = 0;
-    const ro = new ResizeObserver(() => { const w = box.clientWidth; if (w !== lastW) { lastW = w; placeInput(); } });
+    const ro = new ResizeObserver(() => { const w = box.clientWidth; if (w !== lastW) { lastW = w; fitSteps(); placeInput(); } });
     ro.observe(box);
 
     /** Drop a word from the strip, rhymes or bank onto the active step, then move on. */
@@ -985,7 +1037,8 @@
       const ex = (row.cells[k] || '').trim().replace(/-$/, '');
       const fits = !ex || w.toLowerCase().startsWith(ex.toLowerCase());
       if (!fits) { let j = k + 1; while (j < 16 && row.cells[j].trim()) j++; k = Math.min(j, 15); }
-      row.cells[k] = fits || !row.cells[k].trim() ? w : `${row.cells[k].trim()} ${w}`;
+      if (fits || !row.cells[k].trim()) { row.cells[k] = ''; k = placeWords(row, k, [w]); }
+      else row.cells[k] = `${row.cells[k].trim()} ${w}`;
       commit();
       activate(cur.r, Math.min(15, k + 1), { focus: document.activeElement === inp });
     }

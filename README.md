@@ -14,12 +14,12 @@ Open it in your browser. On a phone, use **Share → Add to Home Screen** (iOS) 
 
 ## Features — all on one screen
 
-Each song opens as a **flow sheet**: every bar is a 16-step grid, and you write straight into the steps. Tap a step and type. **Space** moves to the next step, empty steps are rests, and ending a syllable with `-` carries the word into the next step (`ci-` `ty` → "city"). **Enter** starts the next bar; **Backspace** on an empty step steps back. Kicks, snares and hats sit on top of the steps, and each bar's full line is shown above its grid. A bar's ⋯ menu can re-flow its words (spread evenly, or one syllable per step) and insert, clear or delete bars. The dock underneath holds everything else, and all of it can run together.
+Each song opens as a **flow sheet**: every bar is a 16-step grid, and you write straight into the steps. Tap a step and type. **Space** moves to the next step, and a longer word splits itself into syllables across the empty steps after it (`syllable` → `syl-` `la-` `ble`); empty steps are rests, and ending a syllable with `-` carries the word into the next step (`ci-` `ty` → "city"). **Enter** starts the next bar; **Backspace** on an empty step steps back. Kicks, snares and hats sit on top of the steps, and each bar's full line is shown above its grid. A bar's ⋯ menu can re-flow its words (spread evenly, or one syllable per step) and insert, clear or delete bars. The dock underneath holds everything else, and all of it can run together.
 
 | | |
 |---|---|
 | **Syllable counter** | A live count on every bar, plus bar count, total and average per bar. |
-| **Syllable stresses** | Always on, painted directly on your lyrics and on the grid. Stressed syllables are bright and unstressed ones are grey. Words that rhyme with line endings share a coloured underline, which also catches internal rhymes. |
+| **Syllable stresses** | Always on, painted directly on your lyrics and on the grid. Stressed syllables are shown in bright CAPS and unstressed ones are grey. Words that rhyme with line endings share a coloured underline, which also catches internal rhymes. |
 | **Drum pattern placement** | The chip at the top sets the song beat. Tap a bar's beat label to give that bar, or its whole section, a different pattern or a rest. **Play** loops the song bar by bar, lighting up the playing bar and step. The **Beat** panel is a 5-track, 16-step sequencer for editing patterns. |
 | **Rhyme suggestions** | The strip above the dock follows the last word of your previous bar, or the word under your cursor. Tap a rhyme to insert it. The **Rhymes** panel follows along too, with perfect, near and sounds-like rhymes grouped by syllable count. Hold a word to save it to your bank. |
 | **Voice recordings** | **Rec** records over whatever is playing. If nothing is playing, it can start the beat for you. Takes (play, rename, download, share) are in the **Takes** panel. |

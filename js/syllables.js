@@ -130,14 +130,48 @@
   }
 
   const BLENDS = ['bl', 'br', 'cl', 'cr', 'dr', 'fl', 'fr', 'gl', 'gr', 'pl', 'pr', 'tr', 'th', 'sh', 'ch', 'ph', 'wh', 'wr'];
+  const SPLIT = { every: ['ev', 'ery'], every3: ['ev', 'er', 'y'], different: ['dif', 'fer', 'ent'], favorite: ['fa', 'vor', 'ite'], business: ['bus', 'i', 'ness'] };
+  const COMPOUND = /^(every|some|any|no|your|my|him|her|them|it|our)(body|one|thing|where|times?|how|self|selves)$/;
+  const hasV = (s) => /[aeiouy]/.test(s);
+
+  /** Split at a known boundary: `cut` characters go to the head, the tail gets `nt` syllables. */
+  function splitAt(word, cut, nt, n) {
+    const nh = n - nt;
+    if (nh < 1 || nt < 1) return null;
+    return [...splitWord(word.slice(0, cut), nh), ...splitWord(word.slice(cut), nt)];
+  }
 
   function splitWord(word, n) {
     if (n <= 1) return [word];
     const lw = word.toLowerCase();
+    const bare = lw.replace(/[^a-z]/g, '');
+
+    // Fixed spellings, then compounds (some-thing, ev-ery-one) and suffixes (count-ed, run-ning, dark-ness).
+    const fixed = SPLIT[bare + (bare === 'every' && n === 3 ? '3' : '')];
+    if (fixed && fixed.length === n && bare === lw) {
+      let at = 0;
+      return fixed.map((p) => word.slice(at, (at += p.length)));
+    }
+    const cm = bare === lw && lw.match(COMPOUND);
+    if (cm) {
+      const r = splitAt(word, cm[1].length, heurCount(cm[2]), n);
+      if (r) return adjust(r, n);
+    }
+    let sm = lw.match(/^([a-z']*[aeiouy][a-z']*?)(ings?|ness|ments?|less|ful)$/) || lw.match(/^([a-z']*[aeiouy][a-z]*?[td])(ed)$/);
+    // -ly, except where "pl"/"bl" belong together (sup-ply, re-ply, hum-bly)
+    if (!sm && /[^bcfp]ly$/.test(lw) && hasV(lw.slice(0, -2))) sm = [lw, lw.slice(0, -2), 'ly'];
+    if (sm) {
+      let cut = sm[1].length;
+      // a doubled consonant splits between its pair (run-ning, admit-ted) — but not ss/ll/ff/zz (miss-ing, call-ing)
+      if (/^(ing|ed)/.test(sm[2]) && /([^aeiouyslfz])\1$/.test(sm[1])) cut--;
+      const r = splitAt(word, cut, 1, n);
+      if (r) return adjust(r, n);
+    }
+
     const isV = (i) => {
       const c = lw[i];
       if ('aeiou'.includes(c)) return true;
-      if (c === 'y') return i > 0 && !'aeiou'.includes(lw[i + 1] || '');
+      if (c === 'y') return i > 0 && !'aeiou'.includes(lw[i + 1] || 'x');
       return false;
     };
     const groups = [];
@@ -156,15 +190,21 @@
       if (g[0] === g[1] && /^e[sd]?$/.test(tail) && !keep) groups.pop();
     }
     if (groups.length < 2) return adjust([word], n);
+    // consonant + "le" makes the last syllable: sin-gle, lit-tle, ta-ble, syl-la-ble (but tick-le)
+    const cle = lw.match(/[^aeiouy](le[sd]?)$/);
+    const lastE = groups[groups.length - 1];
+    const cleCut = cle && lastE[0] === lastE[1] && lastE[0] === lw.length - cle[1].length + 1
+      ? (lw.slice(cle.index - 1, cle.index + 1) === 'ck' ? cle.index + 1 : cle.index) : -1;
     const cuts = [];
     for (let g = 0; g < groups.length - 1; g++) {
       const a = groups[g][1] + 1;
       const b = groups[g + 1][0];
       const cl = lw.slice(a, b);
       let cut;
-      if (cl.length <= 1) cut = a;
+      if (g === groups.length - 2 && cleCut >= a) cut = cleCut;
+      else if (cl.length <= 1) cut = cl === 'x' ? b : a;
       else if (/^(ck|ng)/.test(cl)) cut = a + 2 > b ? b : a + 2;
-      else if (cl.length === 2) cut = ['th', 'sh', 'ch', 'ph', 'wh'].includes(cl) ? a : a + 1;
+      else if (cl.length === 2) cut = BLENDS.includes(cl) && cl !== 'wr' ? a : a + 1;
       else cut = BLENDS.includes(cl.slice(-2)) ? b - 2 : a + 1;
       cuts.push(Math.min(Math.max(cut, a), b));
     }
