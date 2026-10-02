@@ -1,16 +1,25 @@
 {
+  "id": "./",
   "name": "LosSoulx FlowPad",
   "short_name": "FlowPad",
-  "description": "A minimalist rap writing pad — syllables, stresses, rhymes, beats and recording.",
+  "description": "Write rap on the beat: every syllable on its step, stresses and rhymes lit up, beats, and recording that writes your words in. Works offline; lyrics stay on your device.",
+  "lang": "en",
+  "dir": "ltr",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#05070b",
   "theme_color": "#05070b",
+  "categories": ["music", "productivity", "entertainment"],
   "icons": [
     { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" },
     { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "screenshots": [
+    { "src": "icons/screens/write.png", "sizes": "780x1688", "type": "image/png", "form_factor": "narrow", "label": "Every bar is a 16-step grid — stressed syllables in caps, rhymes underlined" },
+    { "src": "icons/screens/rhymes.png", "sizes": "780x1688", "type": "image/png", "form_factor": "narrow", "label": "Rhymes follow the line you're writing — tap one to drop it in" },
+    { "src": "icons/screens/beat.png", "sizes": "780x1688", "type": "image/png", "form_factor": "narrow", "label": "Drum patterns, or import your own beat and lay the song out to it" }
   ]
 }

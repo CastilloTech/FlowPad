@@ -1,10 +1,11 @@
 // Tiny static server for FlowPad — no dependencies. Usage: npm start  (PORT=8080 npm start)
+// SITE_DIR=_site serves the built, minified site instead of the source.
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const root = __dirname;
+const root = path.resolve(__dirname, process.env.SITE_DIR || '.');
 const port = Number(process.env.PORT) || 5173;
 const types = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',

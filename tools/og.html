@@ -1,0 +1,57 @@
+<!doctype html>
+<!-- The link-preview card (1200×630). Rendered to icons/og.png by: node tools/images.mjs -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FlowPad share card</title>
+<style>
+  :root { --bg: #05070b; --surface: #0c111a; --surface-2: #131b28; --text: #edf3fc; --muted: #8a97ab; --accent: #3d9bff; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif; }
+  .card { position: relative; width: 1200px; height: 630px; padding: 72px 80px; display: grid; grid-template-columns: 1fr 470px; gap: 56px; align-items: center;
+    background: radial-gradient(900px 500px at 85% 20%, rgba(61, 155, 255, 0.16), transparent 60%), var(--bg); }
+  .mark { display: flex; align-items: center; gap: 18px; margin-bottom: 34px; }
+  .mark svg { width: 64px; height: 64px; }
+  .mark span { font-size: 26px; font-weight: 700; color: var(--muted); letter-spacing: 0.01em; }
+  h1 { margin: 0; font-size: 92px; line-height: 0.95; font-weight: 800; letter-spacing: -0.035em; }
+  h1 b { color: var(--accent); font-weight: 800; }
+  p { margin: 28px 0 0; font-size: 31px; line-height: 1.35; color: var(--muted); max-width: 560px; }
+  p em { color: var(--text); font-style: normal; font-weight: 650; }
+  .bar { background: var(--surface); border-radius: 26px; padding: 22px 22px 24px; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55), inset 0 0 0 1.5px rgba(61, 155, 255, 0.25); }
+  .line { font-size: 30px; font-weight: 600; margin: 4px 4px 18px; letter-spacing: -0.01em; color: var(--muted); }
+  .line b { color: var(--accent); font-weight: 700; }
+  .line u { text-decoration-color: #ffb86b; text-decoration-thickness: 4px; text-underline-offset: 8px; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .cell { height: 74px; border-radius: 14px; background: var(--surface-2); position: relative; display: grid; place-items: end center; padding-bottom: 12px;
+    font-size: 21px; font-weight: 750; color: var(--accent); }
+  .cell.b { background: #1d2838; }
+  .cell.now { box-shadow: inset 0 0 0 3px var(--accent); }
+  .cell i { position: absolute; top: 10px; left: 12px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+  .cell i + i { left: 28px; background: #4d5a6e; width: 7px; height: 7px; top: 11px; }
+  .cell.s i { background: #edf3fc; }
+  .cell .u { color: var(--muted); font-weight: 500; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div>
+    <div class="mark">
+      <svg viewBox="0 0 512 512" aria-hidden="true"><rect width="512" height="512" rx="112" fill="#0c111a"/><g fill="#3d9bff"><rect x="136" y="216" width="40" height="80" rx="20"/><rect x="204" y="160" width="40" height="192" rx="20"/><rect x="272" y="112" width="40" height="288" rx="20"/><rect x="340" y="184" width="40" height="144" rx="20"/></g></svg>
+      <span>LosSoulx</span>
+    </div>
+    <h1>Flow<b>Pad</b></h1>
+    <p>Write rap <em>on the beat</em> — every syllable on its step, stresses and rhymes lit up, record and it writes your words in.</p>
+  </div>
+  <div class="bar" aria-hidden="true">
+    <div class="line"><b>LATE NIGHT</b>, <b>PEN TIGHT</b>, <b>CI</b>ty <b>LIGHTS</b> <u><b>GLOW</b></u></div>
+    <div class="grid">
+      <div class="cell b"><i></i><i></i>LATE</div><div class="cell"></div><div class="cell"><i style="background:#4d5a6e;width:7px;height:7px"></i>NIGHT,</div><div class="cell"></div>
+      <div class="cell b s now"><i></i><i></i>PEN</div><div class="cell"></div><div class="cell"><i style="background:#4d5a6e;width:7px;height:7px"></i>TIGHT,</div><div class="cell"><i></i></div>
+      <div class="cell b"><i></i><i></i>CI-</div><div class="cell"></div><div class="cell"><i></i><i></i><span class="u">ty</span></div><div class="cell"></div>
+      <div class="cell b s"><i></i><i></i>LIGHTS</div><div class="cell"></div><div class="cell"><i style="background:#4d5a6e;width:7px;height:7px"></i>GLOW</div><div class="cell"></div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

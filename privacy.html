@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#05070b">
+  <meta name="color-scheme" content="dark light">
+  <meta name="description" content="What LosSoulx FlowPad keeps, where it goes, and what it never collects.">
+  <title>FlowPad Privacy</title>
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <style>
+    :root { --bg: #05070b; --surface: #0c111a; --line: #172131; --text: #edf3fc; --muted: #8a97ab; --accent: #3d9bff; color-scheme: dark; }
+    @media (prefers-color-scheme: light) {
+      :root { --bg: #f5f8fd; --surface: #ffffff; --line: #e0e7f1; --text: #0a1322; --muted: #5b6779; --accent: #1463d8; color-scheme: light; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 400 17px/1.6 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+    main { max-width: 680px; margin: 0 auto; padding: 28px 16px 64px; }
+    a { color: var(--accent); }
+    .back { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; text-decoration: none; margin-bottom: 22px; }
+    h1 { font-size: 32px; line-height: 1.15; letter-spacing: -0.02em; margin: 0 0 8px; }
+    .lede { color: var(--muted); font-size: 18px; margin: 0 0 28px; }
+    h2 { font-size: 19px; margin: 32px 0 8px; letter-spacing: -0.01em; }
+    p, li { color: var(--muted); }
+    b, strong { color: var(--text); font-weight: 650; }
+    ul { padding-left: 20px; }
+    li + li { margin-top: 6px; }
+    .card { background: var(--surface); border-radius: 16px; padding: 18px 20px; box-shadow: inset 0 0 0 1px var(--line); }
+    .card ul { margin: 0; }
+    footer { margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--line); font-size: 14px; color: var(--muted); }
+  </style>
+</head>
+<body>
+<main>
+  <a class="back" href="./">&larr; Back to FlowPad</a>
+  <h1>Privacy</h1>
+  <p class="lede">FlowPad is for writing your bars, not for collecting anything about you. Here's exactly what it keeps and what leaves your device.</p>
+
+  <div class="card">
+    <ul>
+      <li><b>No account, no ads, no analytics, no cookies, no tracking.</b></li>
+      <li><b>Your lyrics stay on your device.</b> FlowPad never uploads them.</li>
+      <li>Two optional helpers talk to outside services — both are explained below, and both can be turned off.</li>
+    </ul>
+  </div>
+
+  <h2>What's kept on your device</h2>
+  <p>Your projects, folders, lyrics, drum patterns, settings, recorded takes and imported beats are saved in your browser's own storage on this device. FlowPad doesn't send them anywhere. Clearing your browser's site data deletes them, so <b>export a backup</b> from Settings now and then. A backup is a file you download and keep wherever you like; it holds lyrics, folders and patterns (takes and imported beats stay on the device).</p>
+  <p>FlowPad also remembers pronunciations it has looked up, so it can work offline.</p>
+
+  <h2>The online dictionary</h2>
+  <p>On by default, it makes syllable counts, stresses and rhymes more accurate. It sends <b>single words</b> — the ones you write, or the word you're looking for rhymes of — to the free <a href="https://www.datamuse.com/api/" rel="noopener">Datamuse API</a>, which answers with pronunciations, rhymes and related words. It never sends your lyrics as a whole. Datamuse's own terms apply to those requests. Turn it off in <b>Settings → Online dictionary</b> and everything runs on the device.</p>
+
+  <h2>Writing your words in while you record</h2>
+  <p>When <b>Write my words into the steps</b> is on (in the Takes panel) and you record, FlowPad uses your browser's built-in speech recognition. The browser may send that audio to its maker to turn it into text — <b>Google</b> for Chrome, <b>Microsoft</b> for Edge, <b>Apple</b> for Safari — under their privacy terms. FlowPad itself only keeps the words and your take, on your device. Turn the switch off and recording stays fully on your device.</p>
+
+  <h2>The microphone</h2>
+  <p>FlowPad uses the microphone only while you're recording, after your browser asks for permission. Takes are saved on your device and only leave it if you download or share them.</p>
+
+  <h2>Hosting</h2>
+  <p>The app's files are served by GitHub Pages. Like any website host, GitHub may log basic request details such as IP addresses — see the <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement" rel="noopener">GitHub Privacy Statement</a>. FlowPad adds nothing on top of that.</p>
+
+  <h2>Questions</h2>
+  <p>Open an issue on <a href="https://github.com/CastilloTech/FlowPad/issues" rel="noopener">GitHub</a>.</p>
+
+  <footer>LosSoulx FlowPad · Last updated October 2026</footer>
+</main>
+</body>
+</html>

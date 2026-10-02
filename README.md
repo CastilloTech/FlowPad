@@ -1,12 +1,17 @@
 # LosSoulx FlowPad
 
-A minimalist, mobile-first rap writing app. It's an installable web app (PWA) with no build step and no dependencies. Everything is saved on your device.
+A minimalist, mobile-first rap writing app. It's an installable web app (PWA) with no dependencies, and no build step needed to work on it. Everything is saved on your device — see [Privacy](privacy.html).
+
+**Live:** https://castillotech.github.io/FlowPad/
 
 ## Run it
 
 ```bash
 npm start            # serves the app at http://localhost:5173
 npm test             # unit tests: syllables, rhyme chains, step editing, beat structure (Node 20+)
+npm run e2e          # end-to-end tests in a headless Chrome / Edge (npm run e2e -- <name> runs one)
+npm run build        # the published site in _site/, JS + CSS minified (SITE_DIR=_site npm start serves it)
+node tools/images.mjs  # re-render the link-preview card and the install screenshots
 ```
 
 Open it in your browser. On a phone, use **Share → Add to Home Screen** (iOS) or **Install app** (Android) and it runs full-screen and works offline.
@@ -28,7 +33,7 @@ Each song opens as a **flow sheet**: every bar is a 16-step grid, and you write 
 | **Word bank** | The **Bank** panel explores words associated with a theme. Saved words appear in the strip; tap one to insert it. |
 | **Projects → Folders → Files** | Organise albums, tracks and verses. Rename, move, duplicate, delete, and search across all your lyrics. |
 
-Other details: black/blue dark theme, plus light and system themes; JSON backup export and import, with a reminder on the home screen when lyrics have changed and the last backup is over a week old (backups hold lyrics, folders and patterns — takes and imported beats stay on the device); the app asks the browser to keep its storage permanently; share, .txt export, or **print / save as PDF** from a song's ⋯ menu; and `[Verse]` / `Hook:` lines are treated as section labels, not bars.
+Other details: black/blue dark theme, plus light and system themes; JSON backup export and import, with a reminder on the home screen when lyrics have changed and the last backup is over a week old (backups hold lyrics, folders and patterns — takes and imported beats stay on the device); the app asks the browser to keep its storage permanently, offers to install itself from your second visit, and shows a calm "your lyrics are saved" card with a ready-made bug report if something breaks; share, .txt export, or **print / save as PDF** from a song's ⋯ menu; and `[Verse]` / `Hook:` lines are treated as section labels, not bars.
 
 ## How the language features work
 
@@ -47,8 +52,40 @@ js/sheet.js           the step model: laying words onto steps, push / pull / mov
 js/structure.js       an imported beat's sections, and laying a song out to match (no DOM, unit-tested)
 js/audio.js           drum synth, transport (step-timing log, count-in), imported beat loops, metronome, mic recorder
 js/voice.js           speech recognition + syllable onsets → words onto steps
-js/app.js             screens, navigation, editor tabs
+js/app/core.js        helpers, state, saving, dialogs, routing, menus, backups, install offer, crash card
+js/app/library.js     home, projects, folders, settings
+js/app/editor.js      the editor's writing side: the sheet, typing, drag, undo, rhymes and bank
+js/app/editor-audio.js  the editor's audio side: beat panel, imported beats + structure, recorder, takes, transport
+js/app/metronome.js   the metronome sheet
+js/app/boot.js        start-up
+privacy.html          what stays on the device and what doesn't
 sw.js                 offline cache (bump VERSION after editing files)
-server.js             zero-dependency dev server
-tests/                node:test unit tests (npm test)
+server.js             zero-dependency dev server (SITE_DIR serves another folder)
+tests/*.test.cjs      node:test unit tests
+tests/e2e/            end-to-end scenarios + a dependency-free headless-browser driver
+tools/                build (minify), share card and screenshots
+.github/workflows/    test on every push; publish to Pages when everything passes
 ```
+
+The `js/app/*.js` files are classic scripts that share one global scope, loaded in order by `index.html`.
+
+## Publishing
+
+Every push to `main` runs the unit tests, builds the minified site, runs the end-to-end tests on that build, and only then publishes it to GitHub Pages. Pull requests get the same checks without publishing. **One-time setup:** repo **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+
+### Your own domain
+
+1. Buy a domain (or use one you have) and add a DNS record: for a subdomain like `flowpad.example.com`, a **CNAME** pointing to `castillotech.github.io`; for a bare domain, GitHub's **A** records (see GitHub's "Managing a custom domain" guide).
+2. Repo **Settings → Pages → Custom domain** → enter it → wait for the DNS check → tick **Enforce HTTPS**.
+3. Update the absolute URLs in `index.html` (`canonical`, `og:url`, `og:image`) to the new address.
+4. **Your lyrics don't move with the address.** Browser storage belongs to the old address, so export a backup there and import it on the new one — and tell your users to do the same.
+
+### Google Play
+
+FlowPad can be wrapped as an Android app (a Trusted Web Activity) that opens the live site full-screen:
+
+1. Install Java and the Android SDK, then `npx @bubblewrap/cli init --manifest <site>/manifest.webmanifest` and `npx @bubblewrap/cli build`. Keep the signing key it creates somewhere safe.
+2. Publish the site's ownership proof at `https://<your domain>/.well-known/assetlinks.json` (Bubblewrap prints it). It must be at the **root** of the domain, so this step needs your own domain (above) — a `github.io/FlowPad` project page can't serve it.
+3. Create a Google Play developer account (one-time fee), upload the `.aab`, and use `icons/screens/*.png` for the store screenshots.
+
+The Apple App Store doesn't accept apps that are only a website wrapper; on iPhone, Add to Home Screen is the way.

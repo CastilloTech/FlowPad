@@ -33,7 +33,7 @@
     die: 1, dies: 1, tried: 1, cried: 1, shoes: 1, goes: 1, does: 1, clothes: 1, ones: 1,
     above: 2, alive: 2, poetry: 3, children: 2, eleven: 3, prayer: 1, prayers: 1, player: 2,
     players: 2, layer: 2, iron: 2, desire: 3, real: 1, really: 2, idol: 2, dial: 2, trial: 2,
-    denial: 3, riot: 2, giant: 2, client: 2, science: 2, rhythm: 2, rhythms: 2, prism: 2,
+    denial: 3, riot: 2, giant: 2, client: 2, rhythm: 2, rhythms: 2, prism: 2,
     chasm: 2, heaven: 2, seven: 2, wednesday: 2, different: 3, favorite: 3, several: 3,
     evil: 2, eyeing: 2, flying: 2, dying: 2, lying: 2, crying: 2, buying: 2, trying: 2,
     toward: 1, towards: 1, cause: 1, "'cause": 1, cuz: 1, 'y\'all': 1, yall: 1,
