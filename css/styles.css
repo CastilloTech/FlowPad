@@ -323,6 +323,14 @@ mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px;
 .gsheet { position: relative; }
 .cell { cursor: text; }
 .cell.act { box-shadow: inset 0 0 0 2px var(--accent); }
+.cell { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; transition: opacity 0.12s, background 0.12s; }
+.cell.lift { opacity: 0.35; }
+.cell.drop { background: var(--accent-soft); box-shadow: inset 0 0 0 2px var(--accent); }
+.drag-ghost {
+  position: fixed; left: 0; top: 0; z-index: 70; pointer-events: none;
+  padding: 7px 12px; border-radius: 10px; background: var(--accent); color: var(--accent-ink);
+  font: 700 15px var(--font); white-space: nowrap; box-shadow: 0 8px 24px var(--glow), var(--shadow);
+}
 .cell .ct { position: absolute; left: 2px; right: 2px; bottom: 5px; text-align: center; font-size: 12px; line-height: 1.1; white-space: nowrap; overflow: hidden; color: var(--text); font-weight: 500; }
 .ct.s0 { color: var(--muted); }
 .ct.s1 { color: var(--accent); font-weight: 750; text-transform: uppercase; letter-spacing: -0.02em; }

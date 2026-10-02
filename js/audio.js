@@ -99,12 +99,15 @@
   };
 
   // ---------- transport ----------
-  const tr = { cfg: null, bar: 0, step: 0, next: 0, timer: null, ending: false };
+  // log: when each step actually sounds ({ t, bar, step, n }), so a recording can be mapped back onto the grid
+  const tr = { cfg: null, bar: 0, step: 0, next: 0, timer: null, ending: false, log: [], bpm: 90 };
   const listeners = new Set();
   const emit = () => listeners.forEach((fn) => fn(state()));
   const state = () => ({ playing: !!tr.cfg, kind: tr.cfg ? tr.cfg.kind : null });
 
   function scheduleStep(c, bar, step, t) {
+    tr.log.push({ t, bar, step, n: c.stepsPerBar });
+    if (tr.log.length > 40000) tr.log.splice(0, 10000);
     const pat = c.getBar ? c.getBar(bar) : null;
     if (pat) {
       for (const k of ['kick', 'snare', 'clap', 'hat', 'open']) {
@@ -154,6 +157,7 @@
     stop();
     tr.cfg = Object.assign({ stepsPerBeat: 4, stepsPerBar: 16, bars: null, swing: 0 }, cfg);
     tr.bar = 0; tr.step = 0; tr.ending = false;
+    tr.log = []; tr.bpm = tr.cfg.bpm;
     tr.next = ctx.currentTime + 0.08;
     tr.timer = setInterval(tick, 25);
     tick();
@@ -175,7 +179,12 @@
     stop,
     state,
     hit(track) { ensure(); voices[track](ctx.currentTime + 0.01); },
-    update(patch) { if (tr.cfg) Object.assign(tr.cfg, patch); },
+    update(patch) { if (tr.cfg) Object.assign(tr.cfg, patch); if (patch.bpm) tr.bpm = patch.bpm; },
+    /** When each step of the last transport run sounded (kept after stop), plus its tempo. */
+    timeline: () => ({ log: tr.log.slice(), bpm: tr.bpm }),
+    now: () => (ctx ? ctx.currentTime : 0),
+    /** Seconds between a sound being scheduled/captured and it being heard/recorded. */
+    latency: () => (ctx ? (ctx.outputLatency || 0) + (ctx.baseLatency || 0) : 0),
     on(fn) { listeners.add(fn); return () => listeners.delete(fn); },
   };
 })();
@@ -184,7 +193,7 @@
 (() => {
   'use strict';
   const FP = window.FP;
-  let stream = null, mr = null, chunks = [], t0 = 0, raf = 0, src = null;
+  let stream = null, mr = null, chunks = [], t0 = 0, t0c = 0, raf = 0, src = null;
 
   const supported = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
 
@@ -197,10 +206,11 @@
     mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
     chunks = [];
     mr.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    const ctx = FP.audio.ensure();
     mr.start(250);
     t0 = performance.now();
+    t0c = ctx.currentTime; // the take's 0:00 on the audio clock, to line it up with the beat
 
-    const ctx = FP.audio.ensure();
     src = ctx.createMediaStreamSource(stream);
     const an = ctx.createAnalyser();
     an.fftSize = 1024;
@@ -224,7 +234,7 @@
         const blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' });
         const duration = (performance.now() - t0) / 1000;
         cleanup();
-        resolve({ blob, duration, mime: blob.type });
+        resolve({ blob, duration, mime: blob.type, t0: t0c });
       };
       rec.stop();
     });

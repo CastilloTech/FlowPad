@@ -14,7 +14,7 @@ Open it in your browser. On a phone, use **Share → Add to Home Screen** (iOS) 
 
 ## Features — all on one screen
 
-Each song opens as a **flow sheet**: every bar is a 16-step grid, and you write straight into the steps. Tap a step and type. **Space** moves to the next step, and a longer word splits itself into syllables across the empty steps after it (`syllable` → `syl-` `la-` `ble`); empty steps are rests, and ending a syllable with `-` carries the word into the next step (`ci-` `ty` → "city"). **Enter** starts the next bar; **Backspace** on an empty step steps back. Kicks, snares and hats sit on top of the steps, and each bar's full line is shown above its grid. A bar's ⋯ menu can re-flow its words (spread evenly, or one syllable per step) and insert, clear or delete bars. The dock underneath holds everything else, and all of it can run together.
+Each song opens as a **flow sheet**: every bar is a 16-step grid, and you write straight into the steps. Tap a step and type. **Space** moves to the next step, and a longer word splits itself into syllables across the empty steps after it (`syllable` → `syl-` `la-` `ble`); empty steps are rests, and ending a syllable with `-` carries the word into the next step (`ci-` `ty` → "city"). **Enter** starts the next bar; **Backspace** on an empty step steps back. Words you type or drop in push the words already there along instead of overwriting them, carrying over into the next bar when a bar is full. **Hold a step** (or drag it with a mouse) to move it onto any step in any bar; dropped on words, you choose **Replace** or **Shift words along**. Let go in place to insert a rest or delete a step. Kicks, snares and hats sit on top of the steps, and each bar's full line is shown above its grid. A bar's ⋯ menu can re-flow its words (spread evenly, or one syllable per step) and insert, clear or delete bars. The dock underneath holds everything else, and all of it can run together.
 
 | | |
 |---|---|
@@ -22,7 +22,7 @@ Each song opens as a **flow sheet**: every bar is a 16-step grid, and you write 
 | **Syllable stresses** | Always on, painted directly on your lyrics and on the grid. Stressed syllables are shown in bright CAPS and unstressed ones are grey. Words that rhyme with line endings share a coloured underline, which also catches internal rhymes. |
 | **Drum pattern placement** | The chip at the top sets the song beat. Tap a bar's beat label to give that bar, or its whole section, a different pattern or a rest. **Play** loops the song bar by bar, lighting up the playing bar and step. The **Beat** panel is a 5-track, 16-step sequencer for editing patterns. |
 | **Rhyme suggestions** | The strip above the dock follows the last word of your previous bar, or the word under your cursor. Tap a rhyme to insert it. The **Rhymes** panel follows along too, with perfect, near and sounds-like rhymes grouped by syllable count. Hold a word to save it to your bank. |
-| **Voice recordings** | **Rec** records over whatever is playing. If nothing is playing, it can start the beat for you. Takes (play, rename, download, share) are in the **Takes** panel. |
+| **Voice recordings** | **Rec** records over whatever is playing. If nothing is playing, it can start the beat for you. With **Write my words into the steps** on (Takes panel), what you rap is transcribed and each syllable lands on the step you said it on — empty bars that played get filled, everything else goes into new bars at the end. Needs Chrome, Edge or Safari; headphones give the cleanest timing. Takes (play, rename, download, share) are in the **Takes** panel. |
 | **Metronome** | Tap the BPM pill. The click layers over the beat. It has tap tempo, 2/4 · 3/4 · 4/4 · 6/8, and accent. |
 | **Word bank** | The **Bank** panel explores words associated with a theme. Saved words appear in the strip; tap one to insert it. |
 | **Projects → Folders → Files** | Organise albums, tracks and verses. Rename, move, duplicate, delete, and search across all your lyrics. |
@@ -42,7 +42,8 @@ css/styles.css        all styles (design tokens at the top)
 js/db.js              IndexedDB storage
 js/syllables.js       syllable counting, splitting, stress, rhyme keys
 js/words.js           rhymes + associations (Datamuse with offline fallback)
-js/audio.js           drum synth, transport, metronome, mic recorder
+js/audio.js           drum synth, transport (with a step-timing log), metronome, mic recorder
+js/voice.js           speech recognition + syllable onsets → words onto steps
 js/app.js             screens, navigation, editor tabs
 sw.js                 offline cache (bump VERSION after editing files)
 server.js             zero-dependency dev server

@@ -1,7 +1,7 @@
 /* FlowPad — app shell: library (projects / folders / files), editor tabs, sheets. */
 (() => {
   'use strict';
-  const { db, syl, words, audio, rec } = FP;
+  const { db, syl, words, audio, rec, voice } = FP;
 
   // ---------- helpers ----------
   const $ = (s, r = document) => r.querySelector(s);
@@ -48,7 +48,7 @@
   // ---------- state ----------
   const S = {
     projects: [], folders: [], files: [], patterns: [],
-    settings: { id: 'settings', theme: 'dark', online: true, bpm: 90, timeSig: '4/4', accent: true, recBeat: true, recClick: false, beatClick: false },
+    settings: { id: 'settings', theme: 'dark', online: true, bpm: 90, timeSig: '4/4', accent: true, recBeat: true, recWords: true, recClick: false, beatClick: false },
     cur: null, caret: {}, cell: {}, panel: null, stripMode: 'rhymes', assoc: {}, lex: null,
   };
 
@@ -156,12 +156,15 @@
     const flat = sylPieces(text);
     const cells = range(16).map(() => []);
     flat.forEach((s, j) => cells[mode === 'pack' ? Math.min(15, j) : Math.min(15, Math.floor((j * 16) / flat.length))].push(s));
-    return cells.map((L) => {
-      if (!L.length) return '';
-      let out = '';
-      L.forEach((s, i) => { out += s.t; if (i < L.length - 1 && s.end) out += ' '; });
-      return L[L.length - 1].end ? out : `${out}-`;
-    });
+    return cells.map(stepText);
+  }
+
+  /** Syllables sharing one step → its text ("syl la-" joins to "sylla-", words keep their spaces). */
+  function stepText(L) {
+    if (!L.length) return '';
+    let out = '';
+    L.forEach((s, i) => { out += s.t; if (i < L.length - 1 && s.end) out += ' '; });
+    return L[L.length - 1].end ? out : `${out}-`;
   }
 
   /** A line as its syllables in order: { t, end } where `end` marks the last syllable of a word. */
@@ -738,7 +741,7 @@
         <span class="cmeasure" id="cmeasure" aria-hidden="true"></span>
       </div>
       <div class="sheet-add"><button class="btn" data-a="add-bar">${icon('plus', 'sm')}Bar</button><button class="btn" data-a="add-sec">${icon('plus', 'sm')}Section</button></div>
-      <p class="hint">Tap a step and type. <b>Space</b> moves to the next step, leave steps empty for rests, end a syllable with <b>-</b> to carry the word on (ci- ty), <b>Enter</b> starts the next bar.</p>
+      <p class="hint">Tap a step and type. <b>Space</b> moves to the next step, leave steps empty for rests, end a syllable with <b>-</b> to carry the word on (ci- ty), <b>Enter</b> starts the next bar. <b>Hold a step</b> to drag it — drop it on words to replace them or shift them along — or let go in place to insert or delete a step.</p>
       <div class="legend"><span><b>CAPS</b> = stressed</span><span>Grey = unstressed</span><span>Underline = rhyme family</span><span><i class="lg k"></i>kick <i class="lg s"></i>snare <i class="lg h"></i>hat</span></div>
     </div>`;
     dock.hidden = false;
@@ -911,24 +914,54 @@
       activate(p, lf < 0 ? 0 : lf);
     }
 
+    /** The bar row after row r — a new one is inserted there if the next row isn't a bar. */
+    function barAfter(r) {
+      if (isBarRow(r + 1)) return r + 1;
+      rows.splice(r + 1, 0, newBarRow());
+      if (nowLine > r) nowLine++;
+      if (cur && cur.r > r) cur.r++;
+      return r + 1;
+    }
+    /** The step after (r, k), carrying over into the next bar. */
+    const nextPos = (r, k) => (k < 15 ? { r, k: k + 1 } : { r: barAfter(r), k: 0 });
+
     /**
-     * Write words from step k on: each word starts a step and its syllables flow into the
-     * following steps — only empty ones, so nothing already written is overwritten.
-     * Returns the last step used.
+     * Make room at step k of row r: it and the words right after it move one step later, up to
+     * the next rest. With no rest left in the bar, the last step carries over into the next bar.
      */
-    function placeWords(row, k, words) {
+    function pushAt(r, k) {
+      const row = rows[r];
+      let j = k;
+      while (j <= 15 && row.cells[j].trim()) j++;
+      if (j > 15) {
+        const nr = barAfter(r);
+        pushAt(nr, 0);
+        rows[nr].cells[0] = row.cells[15];
+        j = 15;
+      }
+      for (let i = j; i > k; i--) row.cells[i] = row.cells[i - 1];
+      row.cells[k] = '';
+    }
+    /** Remove step k: everything after it moves one step earlier. */
+    function pullAt(row, k) { row.cells.splice(k, 1); row.cells.push(''); }
+
+    /**
+     * Write words from step k of row r on: each word starts a step and its syllables flow into
+     * the following steps, over the bar line if needed. Words already there are pushed later,
+     * never overwritten — except the starting step when `replace` (the step being typed in).
+     * Returns the last step used, { r, k }.
+     */
+    function placeWords(r, k, words, replace = true) {
+      let pos = { r, k }, first = true;
       words.forEach((w, idx) => {
-        if (idx > 0) k++;
-        if (k > 15) { k = 15; row.cells[15] = `${row.cells[15]} ${w}`.trim(); return; }
-        const segs = wordSteps(w);
-        let j = 0;
-        while (j < segs.length - 1 && k < 15 && !(row.cells[k + 1] || '').trim()) {
-          row.cells[k] = segs[j++];
-          k++;
-        }
-        row.cells[k] = segs.slice(j).join(' ').replace(/(\S)- /g, '$1'); // no room left: rest stays together
+        wordSteps(w).forEach((s, j) => {
+          if (idx > 0 || j > 0) pos = nextPos(pos.r, pos.k);
+          if (!(first && replace) && rows[pos.r].cells[pos.k].trim()) pushAt(pos.r, pos.k);
+          rows[pos.r].cells[pos.k] = s;
+          first = false;
+        });
       });
-      return k;
+      return pos;
     }
 
     inp.addEventListener('input', () => {
@@ -938,12 +971,11 @@
       if (/\s/.test(v)) {
         // Space (or pasted words): each word takes the next step, split into syllables.
         const parts = v.split(/\s+/).filter(Boolean);
-        let k = cur.k;
-        if (!parts.length) { row.cells[k] = ''; commit(); return step(1); }
-        k = placeWords(row, k, parts);
+        if (!parts.length) { row.cells[cur.k] = ''; commit(); return step(1); }
+        const p = placeWords(cur.r, cur.k, parts);
         commit();
-        cur.k = k;
-        if (/\s$/.test(v)) step(1); else activate(cur.r, k);
+        cur = { r: p.r, k: p.k };
+        if (/\s$/.test(v)) step(1); else activate(p.r, p.k);
         return;
       }
       if (v === '-') { inp.value = ''; return; }
@@ -954,7 +986,7 @@
     /** Enter ends the line: split the word in the current step across the steps after it first. */
     function endLine() {
       const row = rows[cur.r], v = (row.cells[cur.k] || '').trim();
-      if (v && !/\s/.test(v) && wordSteps(v).length > 1) { placeWords(row, cur.k, [v]); commit(); }
+      if (v && !/\s/.test(v) && wordSteps(v).length > 1) { const p = placeWords(cur.r, cur.k, [v]); cur = { r: p.r, k: p.k }; commit(); }
       nextBar();
     }
 
@@ -979,6 +1011,122 @@
     inp.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== inp) inp.hidden = true; }, 0));
 
     VA.cell = (el) => activate(+el.dataset.r, +el.dataset.k, { select: true }); // typing replaces the step
+
+    // ----- hold a step to drag it onto another; let go where it started for step options -----
+    const drag = { t: 0, from: null, on: false, ghost: null, over: null, raf: 0, x: 0, y: 0, sx: 0, sy: 0, mouse: false, suppress: false };
+    const cellAt = (x, y) => { const el = document.elementFromPoint(x, y); return el && el.closest('#lines .cell'); };
+
+    function dragStart() {
+      const { r, k, el } = drag.from;
+      drag.on = true;
+      inp.blur();
+      inp.hidden = true;
+      el.classList.add('lift');
+      if (navigator.vibrate) navigator.vibrate(12);
+      const txt = rows[r].cells[k].trim();
+      if (txt) {
+        drag.ghost = document.createElement('div');
+        drag.ghost.className = 'drag-ghost';
+        drag.ghost.textContent = txt.replace(/-$/, '');
+        document.body.appendChild(drag.ghost);
+      }
+      dragMove(drag.x, drag.y);
+      autoScroll();
+    }
+    function dragMove(x, y) {
+      drag.x = x; drag.y = y;
+      if (!drag.ghost) return;
+      drag.ghost.style.transform = `translate(${x}px, ${y}px) translate(-50%, -150%)`;
+      const c = cellAt(x, y);
+      if (c === drag.over) return;
+      if (drag.over) drag.over.classList.remove('drop');
+      drag.over = c;
+      if (c && c !== drag.from.el) c.classList.add('drop');
+    }
+    /** Scroll while a step is held near the top bar or the dock. */
+    function autoScroll() {
+      if (!drag.on) return;
+      const top = topbar.getBoundingClientRect().bottom, bot = dock.getBoundingClientRect().top;
+      const d = drag.y < top + 48 ? -12 : drag.y > bot - 48 ? 12 : 0;
+      if (d) { window.scrollBy(0, d); dragMove(drag.x, drag.y); }
+      drag.raf = requestAnimationFrame(autoScroll);
+    }
+    function dragEnd(drop) {
+      clearTimeout(drag.t);
+      cancelAnimationFrame(drag.raf);
+      const { from, over, on } = drag;
+      if (drag.ghost) drag.ghost.remove();
+      if (from) from.el.classList.remove('lift');
+      if (over) over.classList.remove('drop');
+      Object.assign(drag, { t: 0, from: null, on: false, ghost: null, over: null });
+      if (!on || !drop) return;
+      drag.suppress = true; // swallow the click that follows the drop
+      setTimeout(() => { drag.suppress = false; }, 400);
+      const tr = over ? +over.dataset.r : from.r, tk = over ? +over.dataset.k : from.k;
+      if (tr === from.r && tk === from.k) stepMenu(from.r, from.k);
+      else moveStep(from.r, from.k, tr, tk);
+    }
+
+    /** Drop a step's words onto another step. Onto words, ask: replace them, or shift them along. */
+    function moveStep(fr, fk, tr, tk) {
+      const text = rows[fr].cells[fk];
+      if (!text.trim()) return;
+      const there = rows[tr].cells[tk].trim();
+      const done = (shift) => {
+        rows[fr].cells[fk] = '';
+        if (shift) pushAt(tr, tk); // the words from here on move one step later (over the bar line if needed)
+        rows[tr].cells[tk] = text;
+        commit();
+        activate(tr, tk, { focus: false });
+      };
+      if (!there) return done(false);
+      const show = (s) => `“${s.trim().replace(/-$/, '')}”`;
+      sheet({
+        title: `Drop ${show(text)} on ${show(there)}`,
+        items: [
+          { label: 'Replace', icon: 'edit', hint: `${show(there)} is removed`, onClick: () => done(false) },
+          { label: 'Shift words along', icon: 'move', hint: `${show(there)} and the words after it move one step later`, onClick: () => done(true) },
+        ],
+      });
+    }
+
+    function stepMenu(r, k) {
+      const row = rows[r];
+      const n = rows.slice(0, r + 1).filter((x) => x.type === 'bar').length;
+      sheet({
+        title: `Bar ${n} · step ${k + 1}`,
+        items: [
+          { label: 'Insert a rest here', icon: 'plus', hint: 'Pushes the words from here one step later', onClick: () => { pushAt(r, k); commit(); } },
+          { label: 'Delete this step', icon: 'minus', hint: 'Pulls the words after it one step earlier', onClick: () => { pullAt(row, k); commit(); } },
+          ...(row.cells[k].trim() ? [{ label: 'Clear step', icon: 'x', onClick: () => { row.cells[k] = ''; commit(); } }] : []),
+        ],
+      });
+    }
+
+    box.addEventListener('pointerdown', (e) => {
+      const c = e.target.closest('.cell');
+      if (!c || e.button > 0) return;
+      dragEnd(false);
+      drag.from = { r: +c.dataset.r, k: +c.dataset.k, el: c };
+      drag.x = drag.sx = e.clientX;
+      drag.y = drag.sy = e.clientY;
+      drag.mouse = e.pointerType === 'mouse';
+      drag.t = setTimeout(dragStart, drag.mouse ? 450 : 320);
+    });
+    const onDragMove = (e) => {
+      if (!drag.from) return;
+      if (drag.on) { e.preventDefault(); dragMove(e.clientX, e.clientY); return; }
+      const moved = Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy);
+      if (drag.mouse && moved > 6 && rows[drag.from.r].cells[drag.from.k].trim()) { clearTimeout(drag.t); drag.x = e.clientX; drag.y = e.clientY; dragStart(); }
+      else if (!drag.mouse && moved > 10) dragEnd(false); // a scroll, not a hold
+    };
+    const onDragUp = (e) => dragEnd(e.type === 'pointerup');
+    document.addEventListener('pointermove', onDragMove);
+    document.addEventListener('pointerup', onDragUp);
+    document.addEventListener('pointercancel', onDragUp);
+    box.addEventListener('touchmove', (e) => { if (drag.on) e.preventDefault(); }, { passive: false }); // hold the page still while dragging
+    box.addEventListener('contextmenu', (e) => { if (e.target.closest('.cell')) e.preventDefault(); });
+    box.addEventListener('click', (e) => { if (drag.suppress) { drag.suppress = false; e.stopPropagation(); e.preventDefault(); } }, true);
     VA['bar-go'] = (el) => { const r = +el.dataset.r; activate(r, Math.min(15, lastFilled(r) + 1)); };
     VA['add-bar'] = () => activate(insertBar(rows.length), 0);
     VA['add-sec'] = async () => {
@@ -1032,15 +1180,20 @@
     /** Drop a word from the strip, rhymes or bank onto the active step, then move on. */
     function insertWord(w) {
       if (!cur) { const r = rows.findIndex((x) => x.type === 'bar'); if (r < 0) return; cur = { r, k: Math.min(15, lastFilled(r) + 1) }; }
-      const row = rows[cur.r];
-      let k = cur.k;
+      const row = rows[cur.r], k = cur.k;
       const ex = (row.cells[k] || '').trim().replace(/-$/, '');
       const fits = !ex || w.toLowerCase().startsWith(ex.toLowerCase());
-      if (!fits) { let j = k + 1; while (j < 16 && row.cells[j].trim()) j++; k = Math.min(j, 15); }
-      if (fits || !row.cells[k].trim()) { row.cells[k] = ''; k = placeWords(row, k, [w]); }
-      else row.cells[k] = `${row.cells[k].trim()} ${w}`;
+      let p;
+      if (fits) p = placeWords(cur.r, k, [w]); // finishes the half-typed word
+      else {
+        // goes after the words already here — into the next rest, or over the bar line
+        let j = k + 1;
+        while (j < 16 && row.cells[j].trim()) j++;
+        const at = j < 16 ? { r: cur.r, k: j } : nextPos(cur.r, 15);
+        p = placeWords(at.r, at.k, [w], false);
+      }
       commit();
-      activate(cur.r, Math.min(15, k + 1), { focus: document.activeElement === inp });
+      activate(p.r, Math.min(15, p.k + 1), { focus: document.activeElement === inp });
     }
 
     // ---------------- beat placement ----------------
@@ -1249,15 +1402,19 @@
     };
 
     // ----- Takes panel + recorder -----
-    let recOn = false, autoDrums = false, takes = [], playingId = null;
+    let recOn = false, autoDrums = false, takes = [], playingId = null, hearing = false, gone = false;
+    const wantWords = () => S.settings.recWords !== false && voice.supported();
     const player = new Audio();
     const urls = new Map();
     const urlOf = (t) => { if (!urls.has(t.id)) urls.set(t.id, URL.createObjectURL(t.blob)); return urls.get(t.id); };
 
     function PTakes() {
       panel.innerHTML = `<div class="ph"><span class="ph-t">Takes</span><span class="count" id="tc"></span><span class="grow"></span><button class="chip sm ${S.settings.recBeat ? 'on' : ''}" data-a="ropt">${icon('drum', 'sm')}Beat on rec</button>${closeBtn}</div>
+        ${voice.supported() ? `<label class="set-row"><div><div class="lbl">Write my words into the steps</div><div class="sub">Your words land on the steps you rap them on. Uses the browser’s speech recognition, which may send audio to Google or Apple.</div></div><input type="checkbox" class="switch" id="rwords" ${wantWords() ? 'checked' : ''}></label>` : ''}
         <ul class="list" id="takes"></ul>
-        <p class="hint">${rec.supported() ? 'Hit Rec in the dock — the beat starts with you and follows the patterns placed on your bars. Headphones keep it out of your vocal.' : 'Recording needs microphone access, which browsers only allow over HTTPS or on localhost.'}</p>`;
+        <p class="hint">${rec.supported() ? 'Hit Rec in the dock — the beat starts with you and follows the patterns placed on your bars. Headphones keep the beat out of your vocal (and out of the word timing).' : 'Recording needs microphone access, which browsers only allow over HTTPS or on localhost.'}${rec.supported() && !voice.supported() ? ' This browser can’t turn speech into words — try Chrome, Edge or Safari for that.' : ''}</p>`;
+      const rw = $('#rwords');
+      if (rw) rw.addEventListener('change', () => { S.settings.recWords = rw.checked; saveSettings(); });
       loadTakes();
     }
     async function loadTakes() {
@@ -1282,6 +1439,9 @@
     async function finishRec() {
       if (!recOn) return;
       recOn = false;
+      const heard = hearing ? voice.stop() : null;
+      hearing = false;
+      const clock = { ...audio.timeline(), drums: T.drums, lat: audio.latency() };
       if (autoDrums) { autoDrums = false; T.drums = false; syncTransport(true); }
       const r = await rec.stop();
       setRecUI(false);
@@ -1289,8 +1449,95 @@
         const all = await db.byIndex('recordings', 'fileId', f.id);
         await db.put('recordings', { id: FP.uid(), fileId: f.id, name: `Take ${all.length + 1}`, blob: r.blob, mime: r.mime, duration: r.duration, created: Date.now() });
         if (S.panel === 'takes') loadTakes();
-        toast(S.panel === 'takes' ? 'Take saved' : 'Take saved — find it in Takes');
+        if (!heard) toast(S.panel === 'takes' ? 'Take saved' : 'Take saved — find it in Takes');
       }
+      if (heard) {
+        if (!gone) updateStrip(true); // drop the "Hearing" line
+        toast('Writing your words into the steps…');
+        await wordsToSteps(await heard, r, clock);
+        if (!gone) updateStrip(true);
+      }
+    }
+
+    /** While recording, the strip shows what speech recognition is hearing. */
+    function showHeard(text) {
+      if (!recOn) return;
+      const t = text.length > 80 ? `…${text.slice(-80)}` : text;
+      stripEl.innerHTML = `<span class="strip-mode">${icon('mic')}Hearing</span><span class="hint-t">${esc(t || 'Listening…')}</span>`;
+      stripEl.scrollLeft = stripEl.scrollWidth;
+    }
+
+    /** Where the beat was at audio-clock time t, in bars (bar 2, halfway = 2.5). */
+    function barPos(clock, t, t0) {
+      const L = clock.log, bpm = clock.bpm || f.bpm;
+      if (!L.length || L[L.length - 1].t < t0) return Math.max(0, (t - t0) * bpm / 240); // no beat: bars from the take's start
+      const at = (e) => e.bar + e.step / e.n;
+      if (t <= L[0].t) return at(L[0]) - (L[0].t - t) * bpm / 240;
+      let lo = 0, hi = L.length - 1;
+      while (lo < hi) { const m = (lo + hi + 1) >> 1; if (L[m].t <= t) lo = m; else hi = m - 1; }
+      const a = L[lo], b = L[lo + 1];
+      if (!b) return at(a) + (t - a.t) * bpm / 240;
+      return at(a) + (at(b) - at(a)) * (t - a.t) / (b.t - a.t);
+    }
+
+    /**
+     * Put the words heard during a take onto the steps they were said on. Bars that played
+     * empty are filled; anything else goes into new bars at the end — nothing written is overwritten.
+     */
+    async function wordsToSteps(heard, r, clock) {
+      if (gone) return;
+      const t0 = r ? r.t0 : 0;
+      const list = heard.phrases
+        .map((p) => { const pcs = sylPieces(p.text.trim()); return { pcs, n: pcs.length, tFirst: p.tFirst - t0, tLast: p.tLast - t0 }; })
+        .filter((p) => p.n);
+      if (!list.length) {
+        const why = { 'not-allowed': 'Speech recognition is blocked', 'service-not-allowed': 'Speech recognition is blocked', network: 'Speech recognition needs an internet connection', 'audio-capture': 'Speech recognition couldn’t use the mic' }[heard.error];
+        toast(`${why || 'No words heard'} — take saved`);
+        return;
+      }
+      let an = { onsets: [], segments: [] };
+      if (r && r.blob) { try { an = await voice.analyze(r.blob); } catch (e) { /* timing falls back to when the words were heard */ } }
+      if (gone) return;
+      const times = voice.align(list, an);
+
+      // each syllable → an absolute 16th step (bar * 16 + step), never earlier than the one before
+      const lag = clock.lat + 0.02;
+      const start = Math.max(0, Math.floor(barPos(clock, t0, t0) * 16));
+      const placed = [];
+      let lastQ = -1;
+      list.forEach((p, i) => p.pcs.forEach((pc, j) => {
+        let q = Math.max(start, Math.round(barPos(clock, t0 + times[i][j] - lag, t0) * 16));
+        if (q < lastQ) q = lastQ;
+        lastQ = q;
+        placed.push({ q, pc });
+      }));
+
+      // recorded bars → sheet rows
+      const seq = barLines(f);
+      const isEmpty = (ri) => rows[ri].cells.every((c) => !c.trim());
+      const trailing = [];
+      if (!clock.drums) for (let i = rows.length - 1; i >= 0; i--) { if (rows[i].type !== 'bar') continue; if (isEmpty(i)) trailing.unshift(i); else break; }
+      const firstB = Math.floor(placed[0].q / 16), lastB = Math.floor(placed[placed.length - 1].q / 16);
+      const rowOf = new Map();
+      for (let b = firstB; b <= lastB; b++) {
+        let ri;
+        if (clock.drums && b < seq.length && isEmpty(seq[b])) ri = seq[b];
+        else if (trailing.length) ri = trailing.shift();
+        else { rows.push(newBarRow()); ri = rows.length - 1; }
+        rowOf.set(b, ri);
+      }
+      const steps = new Map();
+      placed.forEach(({ q, pc }) => {
+        const key = `${rowOf.get(Math.floor(q / 16))}:${q % 16}`;
+        if (!steps.has(key)) steps.set(key, []);
+        steps.get(key).push(pc);
+      });
+      steps.forEach((L, key) => { const [ri, k] = key.split(':').map(Number); rows[ri].cells[k] = stepText(L); });
+      commit();
+      const nw = list.reduce((a, p) => a + p.pcs.filter((x) => x.end).length, 0), nb = lastB - firstB + 1;
+      toast(`Take saved · ${plural(nw, 'word')} written into ${plural(nb, 'bar')}`);
+      const first = blkEl(rowOf.get(firstB));
+      if (first) first.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
     VA.drec = async () => {
       if (recOn) return finishRec();
@@ -1310,6 +1557,10 @@
       recOn = true;
       setRecUI(true);
       if (S.settings.recBeat && !T.drums) { T.drums = true; autoDrums = true; syncTransport(true); }
+      if (wantWords()) {
+        hearing = voice.start(audio.now, showHeard);
+        if (hearing) showHeard('');
+      }
     };
 
     function stopPlayer() {
@@ -1506,6 +1757,11 @@
     const onResize = () => placeInput();
     window.addEventListener('resize', onResize);
     onLeave(() => {
+      gone = true;
+      dragEnd(false);
+      document.removeEventListener('pointermove', onDragMove);
+      document.removeEventListener('pointerup', onDragUp);
+      document.removeEventListener('pointercancel', onDragUp);
       finishRec();
       T.drums = T.click = false;
       audio.stop();
