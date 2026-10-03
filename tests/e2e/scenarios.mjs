@@ -496,7 +496,7 @@ export default [
       assert.equal(r.applied, 'Late · · · night, · · · pen · · · tight, city lights glow · · ·');
       assert.match(r.toast, /“On the beat” appliedUndo/);
       assert.ok(r.undone.startsWith('Late'), r.undone);
-      assert.deepEqual(r.barMenu, ['Rhythm…', 'Insert bar above', 'Insert bar below', 'Clear bar', 'Delete bar']);
+      assert.deepEqual(r.barMenu, ['Rhythm…', 'Hear this bar', 'Insert bar above', 'Insert bar below', 'Clear bar', 'Delete bar']);
       assert.deepEqual(r.flows.slice(0, 3), ['Spread evenly', 'One syllable per step', 'My flow']);
       assert.ok(r.flows.includes('Straight 8ths'));
     },
@@ -595,6 +595,102 @@ export default [
       assert.deepEqual(r.options.slice(0, 2), ['Start the beat when I record', 'Count in']);
       assert.deepEqual(r.songMenu, ['Rename', 'Move to…', 'Duplicate', 'Versions…', 'Share & export…', 'Delete song']);
       assert.deepEqual(r.sections, ['General', 'Sound & timing', 'Your data', 'About']);
+    },
+  },
+
+  {
+    name: 'cadence: triplet grids, library cadences, pocket check, repeated cadences in stats',
+    async run() {
+      const { sleep, bars, steps, menu } = E2E;
+      const out = {};
+      document.querySelector('.row').click(); await sleep(600);
+      const rhythm = async (i) => { bars()[i].querySelector('[data-a="bar-menu"]').click(); await sleep(300); menu(/Rhythm/).click(); await sleep(300); };
+      const words = (b) => steps(b).split(' ').filter((x) => x !== '·').join(' ');
+      // bar 1 to triplets: same words, same order, on a 12-step grid
+      const before = words(bars()[0]);
+      await rhythm(0);
+      [...document.querySelectorAll('#fgrid button')].find((b) => b.textContent === 'Triplets').click(); await sleep(400);
+      out.trip = { n: bars()[0].querySelector('.bgrid').dataset.n, cells: bars()[0].querySelectorAll('.cell').length, tag: bars()[0].querySelector('.gtag')?.textContent, same: words(bars()[0]) === before, first: steps(bars()[0]).split(' ')[0] };
+      E2E.toastAct().click(); await sleep(300);
+      out.undone = bars()[0].querySelectorAll('.cell').length;
+      // a triplet cadence from the library puts bar 2 on triplets
+      await rhythm(1);
+      out.library = [...document.querySelectorAll('.flow-i .menu-i > span:not(.fdots)')].map((x) => x.textContent);
+      document.querySelector('[data-fplay]').click(); await sleep(150); // ▶ preview
+      [...document.querySelectorAll('.flow-i .menu-i')].find((b) => /^Triplet$/.test(b.querySelector('span:not(.fdots)').textContent)).click(); await sleep(400);
+      out.bar2 = { cells: bars()[1].querySelectorAll('.cell').length, filled: [...bars()[1].querySelectorAll('.ct')].filter((c) => c.textContent).length };
+      // pocket check
+      document.querySelector('[data-a="pocket"]').click(); await sleep(300);
+      out.pocket = [...document.querySelectorAll('.bh .pk')].map((x) => x.textContent);
+      // the same cadence over the whole verse: repeat badges, and the stats say where to switch up
+      await rhythm(0);
+      document.querySelector('#fwhole').checked = true;
+      [...document.querySelectorAll('.flow-i .menu-i')].find((b) => /Straight 8ths/.test(b.textContent)).click(); await sleep(400);
+      out.repeats = [...document.querySelectorAll('.bh .rp')].map((x) => x.textContent);
+      document.querySelector('#stat').click(); await sleep(300);
+      out.variety = document.querySelector('.cadv')?.textContent;
+      return out;
+    },
+    check(r, assert) {
+      assert.deepEqual(r.trip, { n: '12', cells: 12, tag: 'triplets', same: true, first: 'Late' });
+      assert.equal(r.undone, 16);
+      assert.ok(r.library.includes('Triplet') && r.library.includes('Boom bap bounce'), `${r.library}`);
+      assert.equal(r.bar2.cells, 12);
+      assert.ok(r.bar2.filled >= 10, 'a 13-syllable bar on 12 triplets fills them');
+      assert.ok(r.pocket.length >= 6 && r.pocket.every((x) => /^\d+\/\d+$/.test(x)), `${r.pocket}`);
+      assert.deepEqual(r.repeats, ['≡3', '≡4']);
+      assert.match(r.variety, /Bars 1–4 share one cadence/);
+    },
+  },
+
+  {
+    name: 'cadence: tap one in over the beat, write into it as a guide, hear a bar',
+    audio: true,
+    async run() {
+      const { sleep, bars, steps, menu, type } = E2E;
+      if (!(await E2E.audioRuns())) return { skipped: 'audio clock does not run here' };
+      document.querySelector('.row').click(); await sleep(600);
+      const out = {};
+      // a fresh bar at the end, tapped on the four beats
+      document.querySelector('[data-a="add-bar"]').click(); await sleep(200);
+      document.querySelector('#cin').blur();
+      const at = bars().length - 1, B = () => bars()[at];
+      B().querySelector('[data-a="bar-menu"]').click(); await sleep(300);
+      menu(/Rhythm/).click(); await sleep(300);
+      document.querySelector('.sheet [data-a="ftap"]').click(); await sleep(400);
+      document.querySelector('#tgo').click();
+      // wait for bar 1 to be scheduled, then tap on its beats (as heard: plus the speaker delay)
+      let bar0 = null;
+      for (let i = 0; i < 100 && !bar0; i++) { await sleep(30); bar0 = FP.audio.timeline().log.find((e) => e.bar === 0 && e.step === 0); }
+      const beat = 60 / 90, tap = document.querySelector('#ttap');
+      for (let i = 0; i < 4; i++) {
+        const due = bar0.t + i * beat + FP.audio.latency() + 0.01;
+        while (FP.audio.now() < due) await sleep(3);
+        tap.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerType: 'touch' }));
+      }
+      for (let i = 0; i < 80 && document.querySelector('#tuse').hidden; i++) await sleep(50);
+      out.result = document.querySelector('#tres').textContent;
+      out.dots = [...document.querySelectorAll('#tdots i')].map((d, k) => (d.classList.contains('on') ? k : -1)).filter((k) => k >= 0);
+      document.querySelector('.sheet [data-a="tguide"]').click(); await sleep(400);
+      out.slots = [...B().querySelectorAll('.cell.slot')].map((c) => +c.dataset.k);
+      // typing fills the slots in order
+      await type('one '); await type('two '); await type('three '); await type('four ');
+      out.written = steps(B());
+      out.movedOn = document.querySelector('.cell.act')?.dataset.r === String(+B().querySelector('.cell').dataset.r + 1);
+      // hear the bar: its own playback, the playhead on it
+      B().querySelector('[data-a="bar-menu"]').click(); await sleep(300);
+      menu(/Hear this bar/).click(); await sleep(1200);
+      out.playing = FP.audio.state();
+      out.playheadOnBar = !!B().querySelector('.cell.now');
+      return out;
+    },
+    check(r, assert) {
+      assert.deepEqual(r.dots, [0, 4, 8, 12], r.result);
+      assert.deepEqual(r.slots, [0, 4, 8, 12]);
+      assert.equal(r.written, 'one · · · two · · · three · · · four · · ·');
+      assert.ok(r.movedOn, 'a filled guide moves on to the next bar');
+      assert.deepEqual(r.playing, { playing: true, kind: 'bar' });
+      assert.ok(r.playheadOnBar);
     },
   },
 

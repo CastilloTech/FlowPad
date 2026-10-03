@@ -104,6 +104,15 @@
         o.connect(g).connect(dest);
         o.start(t); o.stop(t + 0.05);
       },
+      /** A word's syllable, heard as a short blip: higher and louder when stressed. */
+      blip(t, strong) {
+        const o = c.createOscillator(), g = c.createGain();
+        o.type = 'triangle';
+        o.frequency.value = strong ? 1250 : 880;
+        env(g.gain, t, strong ? 0.32 : 0.16, 0.002, 0.06);
+        o.connect(g).connect(dest);
+        o.start(t); o.stop(t + 0.09);
+      },
       click(t, accent) {
         const o = c.createOscillator(), g = c.createGain();
         o.type = 'square';
@@ -134,6 +143,7 @@
       return;
     }
     if (c.beat) c.beat(bar, step, t); // an imported beat starts its loops on bar lines
+    if (c.words && step === 0) c.words(bar, t, (c.stepsPerBar * 60) / c.bpm / c.stepsPerBeat); // the bar's syllables, timed within it
     const pat = c.getBar ? c.getBar(bar) : null;
     if (pat) {
       for (const k of ['kick', 'snare', 'clap', 'hat', 'open']) {
@@ -403,6 +413,15 @@
     /** The measured headphone delay in seconds, or null to go back to what the browser reports. */
     setLatency(s) { userLat = s == null ? null : Math.max(0, Math.min(0.6, s)); },
     clickAt(t, accent) { ensure(); voices.click(t, accent); },
+    blipAt(t, strong) { ensure(); voices.blip(t, strong); },
+    /** Hear a cadence: a bar of clicks, then the cadence's hits as blips over clicks. */
+    previewRhythm({ steps, n = 16, bpm }) {
+      ensure();
+      stop();
+      const beat = 60 / bpm, bar = 4 * beat, t0 = ctx.currentTime + 0.1;
+      for (let i = 0; i < 8; i++) voices.click(t0 + i * beat, i % 4 === 0);
+      steps.forEach((k) => voices.blip(t0 + bar + (k / n) * bar, k % (n / 4) === 0));
+    },
     previewBeat,
     renderMix,
     encodeWav,

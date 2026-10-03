@@ -6,6 +6,7 @@
 
 function editorAudio(ed) {
   const { f, rows, panel, stripEl, closeBtn, inp, commit, paintAll, blkEl, updateStrip, beatChanged } = ed;
+  const activate = (r, k) => ed.activate(r, k);
 
   // ----- Beat panel: the song beat's step sequencer -----
   const songPat = () => pattern(f.beat.def) || patternsSorted()[0];
@@ -27,10 +28,12 @@ function editorAudio(ed) {
       <div class="beat-ctl">${bpmCtl(f.bpm)}
         <label class="mini"><span>Swing</span><input type="range" class="range" id="swing" min="0" max="40" value="${Math.round(f.swing * 100)}"></label>
         <label class="mini"><span>Click</span><input type="checkbox" class="switch" id="bclick" ${T.click ? 'checked' : ''}></label>
+        <label class="mini" title="Every syllable as a blip over the beat — hear your cadence"><span>Words</span><input type="checkbox" class="switch" id="bwords" ${S.settings.hearWords ? 'checked' : ''}></label>
       </div>
       <p class="hint">The highlighted pattern is the song beat${pat.bpm ? ` (sits around ${pat.bpm} BPM)` : ''}. Tap a bar's beat label on the sheet to give it its own pattern.</p>`;
     $('#swing').addEventListener('input', (e) => { f.swing = e.target.value / 100; if (T.drums) audio.update({ swing: f.swing }); saveSoon('files', f); });
     $('#bclick').addEventListener('change', (e) => { T.click = e.target.checked; syncTransport(); });
+    $('#bwords').addEventListener('change', (e) => { S.settings.hearWords = e.target.checked; saveSettings(); });
     $('#tfile').addEventListener('change', (e) => { const fl = e.target.files[0]; e.target.value = ''; if (fl) importBeat(fl); });
     const td = $('#tdrums');
     if (td) td.addEventListener('change', () => { f.track.drums = td.checked; saveSoon('files', f); paintAll(); if (T.drums) syncTransport(true); });
@@ -416,17 +419,19 @@ function editorAudio(ed) {
     if (ed.gone) return null;
     const times = voice.align(list, an);
 
-    // each syllable → an absolute 16th step (bar * 16 + step), never earlier than the one before
+    // each syllable → where it fell in the beat (in bars: bar 2, halfway = 2.5), never before the one before
     const lag = clock.lat + 0.02;
-    const start = Math.max(0, Math.floor(barPos(clock, 0) * 16));
+    const start = Math.max(0, barPos(clock, 0));
     const placed = [];
-    let lastQ = -1;
+    let lastPos = -1;
     list.forEach((p, i) => p.pcs.forEach((pc, j) => {
-      let q = Math.max(start, Math.round(barPos(clock, times[i][j] - lag) * 16));
-      if (q < lastQ) q = lastQ;
-      lastQ = q;
-      placed.push({ q, pc });
+      let pos = Math.max(start, barPos(clock, times[i][j] - lag));
+      if (pos < lastPos) pos = lastPos;
+      lastPos = pos;
+      placed.push({ pos, pc });
     }));
+    // its bar: the one it's closest to the start of within a 32nd (a syllable a hair early belongs to the next bar)
+    const barOf = (pos) => Math.floor(pos + 1 / 32);
 
     snapshot(f, 'Before words from a take');
     // recorded bars → sheet rows
@@ -434,7 +439,7 @@ function editorAudio(ed) {
     const isEmpty = (ri) => rows[ri].cells.every((c) => !c.trim());
     const trailing = [];
     if (!clock.drums) for (let i = rows.length - 1; i >= 0; i--) { if (rows[i].type !== 'bar') continue; if (isEmpty(i)) trailing.unshift(i); else break; }
-    const firstB = Math.floor(placed[0].q / 16), lastB = Math.floor(placed[placed.length - 1].q / 16);
+    const firstB = barOf(placed[0].pos), lastB = barOf(placed[placed.length - 1].pos);
     const rowOf = new Map();
     for (let b = firstB; b <= lastB; b++) {
       let ri;
@@ -444,8 +449,13 @@ function editorAudio(ed) {
       rowOf.set(b, ri);
     }
     const steps = new Map();
-    placed.forEach(({ q, pc }) => {
-      const key = `${rowOf.get(Math.floor(q / 16))}:${q % 16}`;
+    const lastK = new Map();
+    placed.forEach(({ pos, pc }) => {
+      const b = barOf(pos), ri = rowOf.get(b), N = rows[ri].cells.length;
+      // on the bar's own grid (16ths, or triplets), never before the syllable before
+      const k = Math.max(lastK.get(ri) ?? 0, Math.min(N - 1, Math.max(0, Math.round((pos - b) * N))));
+      lastK.set(ri, k);
+      const key = `${ri}:${k}`;
       if (!steps.has(key)) steps.set(key, []);
       steps.get(key).push(pc);
     });
@@ -526,10 +536,10 @@ function editorAudio(ed) {
       const bar = $(`.take[data-id="${t.id}"] .take-bar div`);
       if (bar) bar.style.width = `${clamp((at / (t.duration || 1)) * 100, 0, 100)}%`;
       if (tm && at >= 0) {
-        const q = Math.floor(barPos(tm, at - (tm.lat || 0)) * 16);
-        const b = Math.floor(q / 16);
+        const pos = barPos(tm, at - (tm.lat || 0)), b = Math.floor(pos);
         const ord = t.bars && t.bars[b] != null ? t.bars[b] : (b >= 0 && ords.length ? b % ords.length : -1);
-        if (b >= 0 && ord >= 0) showStep(ords[ord], q % 16);
+        const ri = ord >= 0 ? ords[ord] : -1;
+        if (b >= 0 && ri >= 0 && rows[ri]) showStep(ri, Math.min(rows[ri].cells.length - 1, Math.floor((pos - b) * rows[ri].cells.length)));
       }
       takeRaf = requestAnimationFrame(follow);
     };
@@ -648,8 +658,8 @@ function editorAudio(ed) {
     }
     if (counting) counting = false;
     if (T.drums) {
-      const seq = barLines(f);
-      showStep(seq.length ? seq[b % seq.length] : -1, k);
+      const seq = barLines(f), line = seq.length ? seq[b % seq.length] : -1;
+      showStep(line, line >= 0 && rows[line] ? Math.floor((k * rows[line].cells.length) / 16) : k);
       if (S.panel === 'beat') {
         $$('#seq .st.ph').forEach((x) => x.classList.remove('ph'));
         $$(`#seq .st[data-k="${k}"]`).forEach((x) => x.classList.add('ph'));
@@ -680,9 +690,112 @@ function editorAudio(ed) {
       beat: tk ? (b, k, t) => {
         if (k === 0 && b % tk.rec.bars === 0) audio.loopAt(t, { buffer: tk.buf, offset: tk.rec.offset, bars: tk.rec.bars, bpm: f.bpm, rate: f.bpm / tk.rec.bpm });
       } : null,
+      words: drums ? (b, t, barDur) => {
+        if (!S.settings.hearWords) return;
+        const seq = barLines(f);
+        if (seq.length) blipsFor(seq[b % seq.length], t, barDur);
+      } : null,
       onStep: onTick,
       onStop: () => { clearNow(); },
     };
+  }
+  /** A bar's syllables as blips over the beat, each at its moment in the bar (triplets too). */
+  function blipsFor(ri, t, barDur) {
+    const R = rows[ri];
+    if (!R || R.type !== 'bar') return;
+    const v = barView(R.cells), N = R.cells.length;
+    R.cells.forEach((c, k) => { if (c.trim()) audio.blipAt(t + (k / N) * barDur, v.cls[k] === 's1'); });
+  }
+
+  /** Hear one bar: twice over its drums (or a click), its words as blips, the playhead on it. */
+  function hearBar(r) {
+    stopPlayer();
+    if (T.drums || T.click) { T.drums = T.click = false; updateTransportUI(); }
+    const cfg = transportCfg(true), N = rows[r].cells.length;
+    audio.play({
+      ...cfg, kind: 'bar', bars: 2, loop: false, beat: null,
+      click: !cfg.getBar, // an imported beat with the drums off: a click keeps the time
+      getBar: cfg.getBar ? () => barSteps(f, r) : null,
+      words: (b, t, barDur) => blipsFor(r, t, barDur),
+      onStep: (b, k) => { if (b >= 0) showStep(r, Math.floor((k * N) / 16)); },
+      onStop: () => clearNow(),
+    });
+  }
+
+  /**
+   * Tap a cadence in: a bar of clicks counts you in, then you tap a bar of rhythm over the beat.
+   * The taps (minus your headphone delay) snap to the bar's grid; lay its words on it, use it as
+   * a guide to write into, or save it as a cadence.
+   */
+  function tapCadence(r) {
+    stopPlayer();
+    if (T.drums || T.click) { T.drums = T.click = false; updateTransportUI(); }
+    const R = rows[r], N = R.cells.length, barDur = 240 / f.bpm, text = barView(R.cells).text;
+    let taps = [], steps = [], running = false;
+    const sh = sheet({
+      title: 'Tap a cadence',
+      html: `<p class="msg">A bar of clicks counts you in — then tap the rhythm for one bar, over the beat. Don’t think about words yet.</p>
+        <button class="tapbig" id="ttap" disabled>Tap the rhythm</button>
+        <div class="tdots" id="tdots">${ed.flowDots([], N)}</div>
+        <p class="src" id="tres">${N === 16 ? '16ths' : N === 12 ? 'Triplets' : 'Fast triplets'} · ${f.bpm} BPM</p>
+        <div class="sheet-actions"><button class="btn primary" id="tgo">Start</button></div>
+        <div id="tuse" hidden>
+          ${text ? '<button class="btn block" data-a="tlay">Lay this bar’s words on it</button>' : ''}
+          <button class="btn block" data-a="tguide">Use it as a guide to write into</button>
+          <button class="btn block" data-a="tsave">Save it as a cadence</button>
+        </div>`,
+      actions: {
+        tlay: () => { sh.close(); R.cells = SH.applyFlow(text, steps, N); commit(); toast('Words laid on your cadence', { label: 'Undo', fn: ed.undo }); },
+        tguide: () => { sh.close(); R.guide = steps; commit(); activate(r, steps[0]); toast('Guide set — type, and each word lands in the next slot', { label: 'Undo', fn: ed.undo }); },
+        tsave: async () => {
+          sh.close();
+          const name = await ask({ title: 'Name this cadence', value: `Cadence ${S.flows.length + 1}`, ok: 'Save' });
+          if (!name) return;
+          S.flows.unshift({ id: FP.uid(), name, steps, n: N, user: true });
+          db.put('kv', { id: 'flows', list: S.flows });
+          toast('Saved — find it under Rhythm in any bar’s ⋯ menu');
+        },
+      },
+    });
+    const el = sh.el, tap = $('#ttap', el), go = $('#tgo', el), res = $('#tres', el);
+    const finish = () => {
+      if (!running) return;
+      running = false;
+      tap.disabled = true;
+      go.disabled = false;
+      go.textContent = 'Tap again';
+      const bar0 = audio.timeline().log.find((e) => e.bar === 0 && e.step === 0);
+      steps = bar0 ? FP.cadence.fromTaps(taps.map((t) => t - bar0.t), barDur, N) : [];
+      $('#tdots', el).innerHTML = ed.flowDots(steps, N);
+      if (!steps.length) { res.textContent = 'No taps landed in the bar — press Start and tap after the count-in.'; $('#tuse', el).hidden = true; return; }
+      res.textContent = `${plural(steps.length, 'hit')} · ${N === 16 ? '16ths' : N === 12 ? 'triplets' : 'fast triplets'}`;
+      $('#tuse', el).hidden = false;
+      buzz(12);
+    };
+    go.addEventListener('click', () => {
+      if (running) return;
+      running = true;
+      taps = [];
+      go.disabled = true;
+      tap.disabled = false;
+      $('#tuse', el).hidden = true;
+      res.textContent = 'Listen… four clicks, then tap your rhythm';
+      const cfg = transportCfg(true);
+      audio.play({
+        ...cfg, kind: 'tap', bars: 1, loop: false, countIn: 1, click: true, beat: null, words: null,
+        getBar: cfg.getBar ? () => barSteps(f, r) : null,
+        onStep: (b) => { if (b === 0) res.textContent = 'Tap!'; },
+        onStop: finish,
+      });
+    });
+    tap.addEventListener('pointerdown', (e) => {
+      if (!running) return;
+      e.preventDefault();
+      // when it was heard: the touch's own time, minus the speaker / headphone delay
+      taps.push(audio.now() - Math.max(0, performance.now() - e.timeStamp) / 1000 - audio.latency());
+      tap.classList.remove('hit'); void tap.offsetWidth; tap.classList.add('hit');
+    });
+    sh.onclose = () => { if (running) { running = false; audio.stop(); } };
   }
   function startTransport(countIn = 0) {
     const cfg = transportCfg(T.drums);
@@ -730,5 +843,5 @@ function editorAudio(ed) {
     syncTransport(true);
   };
 
-  return { PBeat, PTakes, syncTransport, updateTransportUI, stopPlayer, finishRec, loadTrack };
+  return { PBeat, PTakes, syncTransport, updateTransportUI, stopPlayer, finishRec, loadTrack, hearBar, tapCadence };
 }

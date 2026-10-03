@@ -106,7 +106,7 @@ function Editor(id) {
         <li><b>Enter</b> starts the next bar. <b>Hold a step</b> to drag it: drop on words to shift them along, or pause on them to replace.</li>
         <li><b>Swipe a bar</b> left to delete it, right to duplicate it.</li>
       </ul>
-      <div class="legend"><span><b>CAPS</b> = stressed</span><span>Grey = unstressed</span><span>Underline = rhyme family</span><span><i class="lg mcl"></i>Shade = rhyme chain <button class="link" data-a="chains" id="chainsb">${S.settings.chains === false ? 'off' : 'on'}</button></span><span><i class="lg k"></i>kick <i class="lg s"></i>snare <i class="lg h"></i>hat</span></div>
+      <div class="legend"><span><b>CAPS</b> = stressed</span><span>Grey = unstressed</span><span>Underline = rhyme family</span><span><i class="lg mcl"></i>Shade = rhyme chain <button class="link" data-a="chains" id="chainsb">${S.settings.chains === false ? 'off' : 'on'}</button></span><span><i class="lg pkl"></i>Pocket check <button class="link" data-a="pocket" id="pocketb">${S.settings.pocket ? 'on' : 'off'}</button></span><span><i class="lg k"></i>kick <i class="lg s"></i>snare <i class="lg h"></i>hat</span></div>
     </details>
   </div>`;
   dock.hidden = false;
@@ -130,7 +130,8 @@ function Editor(id) {
   const blkEl = (r) => box.querySelector(`.blk[data-r="${r}"]`);
   const cellEl = (r, k) => box.querySelector(`.cell[data-r="${r}"][data-k="${k}"]`);
   const isBarRow = (r) => !!rows[r] && rows[r].type === 'bar';
-  const lastFilled = (r) => { for (let k = 15; k >= 0; k--) if (rows[r].cells[k].trim()) return k; return -1; };
+  const lastFilled = (r) => { for (let k = rows[r].cells.length - 1; k >= 0; k--) if (rows[r].cells[k].trim()) return k; return -1; };
+  const lastStep = (r) => rows[r].cells.length - 1;
   const nextBarRow = (r) => { for (let i = r + 1; i < rows.length; i++) if (isBarRow(i)) return i; return -1; };
   const prevBarRow = (r) => { for (let i = r - 1; i >= 0; i--) if (isBarRow(i)) return i; return -1; };
 
@@ -214,6 +215,7 @@ function Editor(id) {
     flush();
     return marks;
   }
+  VA.pocket = () => { S.settings.pocket = !S.settings.pocket; saveSettings(); paintAll(); $('#pocketb').textContent = S.settings.pocket ? 'on' : 'off'; };
   VA.chains = () => { S.settings.chains = S.settings.chains === false; saveSettings(); paintAll(); $('#chainsb').textContent = S.settings.chains === false ? 'off' : 'on'; };
 
   /** One row's HTML — content only; the cursor and playhead are applied on top (applyState). */
@@ -222,7 +224,18 @@ function Editor(id) {
     if (row.type === 'label') return `<button class="blk label" data-a="label" data-r="${i}">${esc(row.text)}</button>`;
     const beatOff = f.track && !f.track.drums; // an imported beat replaces the drum patterns
     const steps = beatOff ? null : barSteps(f, i);
-    const has = (k, ...ts) => steps && ts.some((t) => steps[t] && steps[t][k]);
+    const N = row.cells.length; // 16, or 12 / 24 for triplets
+    // drum hits under step k: any of the 16ths it covers (patterns are always 16 steps)
+    const has = (k, ...ts) => {
+      if (!steps) return false;
+      const a = Math.round((k * 16) / N), z = Math.max(a + 1, Math.round(((k + 1) * 16) / N));
+      for (let x = a; x < z; x++) if (ts.some((t) => steps[t] && steps[t][x])) return true;
+      return false;
+    };
+    // the pocket: stressed syllables between the 8ths (or triplets) and off the kick and snare
+    const kicks = steps && new Set(range(16).filter((x) => ['kick', 'snare', 'clap'].some((t) => steps[t] && steps[t][x])));
+    const pk = S.settings.pocket && v.text ? FP.cadence.pocket(v.cls, kicks) : null;
+    const rep = repNow.get(i) || 1;
     const cnt = syl.lineCount(v.text);
     // more than one syllable off the song's target: marked (+3 over, −2 under)
     const off = f.target && cnt ? cnt - f.target : 0, miss = Math.abs(off) > 1;
@@ -231,12 +244,12 @@ function Editor(id) {
       ? `<button class="pat-btn set" data-a="bar-pat" data-r="${i}" data-n="${n}">${esc(patName(row.pat))}</button>`
       : `<button class="icon-btn pat-i" data-a="bar-pat" data-r="${i}" data-n="${n}" aria-label="Beat for bar ${n}: ${esc(patName(f.beat.def))}" title="Beat: ${esc(patName(f.beat.def))}">${icon('drum', 'sm')}</button>`;
     return `<div class="blk bar" data-r="${i}">
-        <div class="bh"><span class="bar-n">${n}</span>${pat}<span class="grow"></span><span class="cnt${miss ? (off > 0 ? ' hi' : ' lo') : ''}"${miss ? ` title="${off > 0 ? off + ' over' : -off + ' under'} the ${f.target}-syllable target"` : ''}>${cnt} syl${miss ? ` <b>${off > 0 ? '+' : '−'}${Math.abs(off)}</b>` : ''}</span><button class="icon-btn bm" data-a="bar-menu" data-r="${i}" data-n="${n}" aria-label="Bar ${n} options">${icon('more')}</button></div>
+        <div class="bh"><span class="bar-n">${n}</span>${pat}${N !== 16 ? `<span class="gtag">${N === 12 ? 'triplets' : 'fast triplets'}</span>` : ''}${row.guide ? '<span class="gtag guide">guide</span>' : ''}<span class="grow"></span>${rep >= 3 ? `<span class="rp" title="Same cadence as the ${rep - 1} bars before — switch it up?">≡${rep}</span>` : ''}${pk && pk.stressed ? `<span class="pk${pk.off.length ? '' : ' ok'}" title="${pk.inPocket} of ${pk.stressed} stressed syllables in the pocket">${pk.inPocket}/${pk.stressed}</span>` : ''}<span class="cnt${miss ? (off > 0 ? ' hi' : ' lo') : ''}"${miss ? ` title="${off > 0 ? off + ' over' : -off + ' under'} the ${f.target}-syllable target"` : ''}>${cnt} syl${miss ? ` <b>${off > 0 ? '+' : '−'}${Math.abs(off)}</b>` : ''}</span><button class="icon-btn bm" data-a="bar-menu" data-r="${i}" data-n="${n}" aria-label="Bar ${n} options">${icon('more')}</button></div>
         <div class="bline" data-a="bar-go" data-r="${i}">${v.text ? lineHTML(v.text, color, mk) : '<span class="ph-t2">Tap a step to write</span>'}</div>
-        <div class="bgrid">${range(16).map((k) => {
+        <div class="bgrid" data-n="${N}">${range(N).map((k) => {
           const raw = (row.cells[k] || '').trim();
           const cont = /\S-$/.test(raw);
-          return `<div class="cell ${k % 4 === 0 ? 'b' : ''}" data-a="cell" data-r="${i}" data-k="${k}"><span class="dr">${has(k, 'kick') ? '<i class="k"></i>' : ''}${has(k, 'snare', 'clap') ? '<i class="s"></i>' : ''}${has(k, 'hat', 'open') ? '<i class="h"></i>' : ''}</span><span class="ct ${v.cls[k]}">${esc(cont ? raw.slice(0, -1) : raw)}${cont ? '<i class="hy">-</i>' : ''}</span></div>`;
+          return `<div class="cell ${k % (N / 4) === 0 ? 'b' : ''}${pk && pk.off.includes(k) ? ' offp' : ''}${row.guide && row.guide.includes(k) ? ' slot' : ''}" data-a="cell" data-r="${i}" data-k="${k}"><span class="dr">${has(k, 'kick') ? '<i class="k"></i>' : ''}${has(k, 'snare', 'clap') ? '<i class="s"></i>' : ''}${has(k, 'hat', 'open') ? '<i class="h"></i>' : ''}</span><span class="ct ${v.cls[k]}">${esc(cont ? raw.slice(0, -1) : raw)}${cont ? '<i class="hy">-</i>' : ''}</span></div>`;
         }).join('')}</div>
       </div>`;
   }
@@ -245,9 +258,10 @@ function Editor(id) {
    * Paint the sheet. Each row's HTML is compared with what's on screen and only changed rows
    * are replaced, so typing in one step of a long song touches one bar, not all of them.
    */
-  let shown = [];
+  let shown = [], repNow = new Map();
   function paintAll() {
     const views = rows.map((r) => (r.type === 'bar' ? barView(r.cells) : null));
+    repNow = cadenceRepeats();
     const families = rhymeFamilies(views);
     const marks = chainMarks(views);
     let n = 0, total = 0;
@@ -275,6 +289,15 @@ function Editor(id) {
     applyState();
     $('#stat').textContent = n ? `${plural(n, 'bar')} · avg ${Math.round(total / n)} syl` : 'Add a bar to start';
     placeInput();
+  }
+  /** How many bars in a row (within a section) share each bar's cadence. */
+  function cadenceRepeats() {
+    const out = new Map();
+    let run = [];
+    const flush = () => { FP.cadence.repeats(run.map((ri) => rows[ri].cells)).forEach((c, j) => out.set(run[j], c)); run = []; };
+    rows.forEach((r, i) => { if (r.type === 'bar') run.push(i); else flush(); });
+    flush();
+    return out;
   }
   /** Cursor, active step and playhead — kept out of the row HTML so moving them never repaints. */
   function applyState() {
@@ -442,7 +465,7 @@ function Editor(id) {
 
   function activate(r, k, { focus = true, select = false } = {}) {
     if (!isBarRow(r)) return;
-    cur = { r, k: clamp(k, 0, 15) };
+    cur = { r, k: clamp(k, 0, lastStep(r)) };
     S.cell[f.id] = cur;
     $$('.cell.act', box).forEach((c) => c.classList.remove('act'));
     $$('.blk.cur', box).forEach((b) => b.classList.remove('cur'));
@@ -485,8 +508,8 @@ function Editor(id) {
   }
   function step(d) {
     const k = cur.k + d;
-    if (k > 15) return nextBar();
-    if (k < 0) { const p = prevBarRow(cur.r); if (p >= 0) activate(p, 15); return; }
+    if (k > lastStep(cur.r)) return nextBar();
+    if (k < 0) { const p = prevBarRow(cur.r); if (p >= 0) activate(p, lastStep(p)); return; }
     activate(cur.r, k);
   }
   function vert(d) {
@@ -547,6 +570,7 @@ function Editor(id) {
       const parts = v.split(/\s+/).filter(Boolean);
       if (!parts.length) { row.cells[cur.k] = ''; commit(); return step(1); }
       const p = placeWords(cur.r, cur.k, parts);
+      if (rows[p.r].guide) { followGuide(p.r, /\s$/.test(v)); return; }
       commit();
       sound();
       cur = { r: p.r, k: p.k };
@@ -558,6 +582,21 @@ function Editor(id) {
     commit('type');
     if (v.length > 1 && v.endsWith('-')) step(1); // syllable continues on the next step
   });
+  /**
+   * A guided bar: lay its words onto the guide's slots in order, then go to the next empty slot
+   * (or the next bar once they're all filled).
+   */
+  function followGuide(r, next) {
+    const R = rows[r];
+    R.cells = SH.applyFlow(barView(R.cells).text, R.guide, R.cells.length);
+    commit();
+    sound();
+    const lf = lastFilled(r), g = R.guide.find((k) => k > lf);
+    cur = { r, k: lf < 0 ? 0 : lf };
+    if (!next) activate(r, cur.k);
+    else if (g == null) nextBar();
+    else activate(r, g);
+  }
   /** Enter ends the line: split the word in the current step across the steps after it first. */
   function endLine() {
     const row = rows[cur.r], v = (row.cells[cur.k] || '').trim();
@@ -619,13 +658,13 @@ function Editor(id) {
 
   /** Slide the words from step tk of row tr to where a shift would put them (one step later, up to the next rest). */
   function shiftPreview(tr, tk) {
-    const row = rows[tr], from = drag.from;
+    const row = rows[tr], from = drag.from, L = row.cells.length - 1;
     let j = tk;
-    while (j <= 15 && row.cells[j].trim() && !(tr === from.r && j === from.k)) j++;
+    while (j <= L && row.cells[j].trim() && !(tr === from.r && j === from.k)) j++;
     const cells = blkEl(tr).querySelectorAll('.cell');
-    const next = j > 15 && isBarRow(tr + 1) && blkEl(tr + 1);
-    for (let k = tk; k < Math.min(j, 16); k++) {
-      const dest = k < 15 ? cells[k + 1] : next && next.querySelectorAll('.cell')[0];
+    const next = j > L && isBarRow(tr + 1) && blkEl(tr + 1);
+    for (let k = tk; k < Math.min(j, L + 1); k++) {
+      const dest = k < L ? cells[k + 1] : next && next.querySelectorAll('.cell')[0];
       const ct = cells[k].querySelector('.ct');
       if (!dest || !ct) continue;
       const a = cells[k].getBoundingClientRect(), d = dest.getBoundingClientRect();
@@ -837,7 +876,11 @@ function Editor(id) {
   };
   box.addEventListener('touchend', swipeEnd);
   box.addEventListener('touchcancel', swipeEnd);
-  VA['bar-go'] = (el) => { const r = +el.dataset.r; activate(r, Math.min(15, lastFilled(r) + 1)); };
+  VA['bar-go'] = (el) => {
+    const r = +el.dataset.r, g = rows[r].guide, lf = lastFilled(r);
+    // a guided bar opens at its next empty slot
+    activate(r, g ? (g.find((k) => k > lf) ?? g[g.length - 1]) : Math.min(lastStep(r), lf + 1));
+  };
   VA['add-bar'] = () => activate(insertBar(rows.length), 0);
   VA['add-sec'] = async () => {
     const name = await ask({ title: 'New section', placeholder: 'Verse 2, Hook, Bridge…', ok: 'Add' });
@@ -863,7 +906,8 @@ function Editor(id) {
     sheet({
       title: `Bar ${el.dataset.n}`,
       items: [
-        { label: 'Rhythm…', icon: 'flow', hint: 'Spread, pack or a saved flow', onClick: () => rhythmSheet(r) },
+        { label: 'Rhythm…', icon: 'flow', hint: 'Cadences, triplets, tap one in', onClick: () => rhythmSheet(r) },
+        { label: 'Hear this bar', icon: 'play', hint: 'Its words as blips, over the beat', onClick: () => hearBar(r) },
         { label: 'Insert bar above', icon: 'plus', onClick: () => { if (cur && cur.r >= r) cur.r++; insertBar(r); activate(r, 0); } },
         { label: 'Insert bar below', icon: 'plus', onClick: () => { if (cur && cur.r > r) cur.r++; insertBar(r + 1); activate(r + 1, 0); } },
         { label: 'Clear bar', icon: 'x', onClick: () => { row.cells = newBarRow().cells; commit(); } },
@@ -880,20 +924,27 @@ function Editor(id) {
     });
   };
 
-  // ---------------- flows: a bar's rhythm, saved and laid onto other bars ----------------
+  // ---------------- cadences: a bar's rhythm, from the library, tapped in, or saved ----------------
   const FLOWS = [
-    { id: 'f-beat', name: 'On the beat', steps: [0, 4, 8, 12] },
-    { id: 'f-8ths', name: 'Straight 8ths', steps: [0, 2, 4, 6, 8, 10, 12, 14] },
-    { id: 'f-push', name: 'Syncopated', steps: [0, 3, 6, 8, 11, 14] },
-    { id: 'f-lazy', name: 'Laid back', steps: [2, 6, 10, 14] },
-    { id: 'f-16ths', name: 'Double time', steps: range(16) },
+    { id: 'f-beat', name: 'On the beat', note: 'Four hits, square on the beat', steps: [0, 4, 8, 12] },
+    { id: 'f-half', name: 'Half time', note: 'Two heavy hits — slow and big', steps: [0, 8] },
+    { id: 'f-8ths', name: 'Straight 8ths', note: 'Steady, like talking', steps: [0, 2, 4, 6, 8, 10, 12, 14] },
+    { id: 'f-lazy', name: 'Laid back', note: 'Behind the beat, relaxed', steps: [2, 6, 10, 14] },
+    { id: 'f-push', name: 'Syncopated', note: 'Off-beat pushes, bouncy', steps: [0, 3, 6, 8, 11, 14] },
+    { id: 'f-bap', name: 'Boom bap bounce', note: 'The 90s swing between hits', steps: [0, 3, 4, 7, 8, 11, 12, 14] },
+    { id: 'f-16ths', name: 'Double time', note: 'Every 16th — fast', steps: range(16) },
+    { id: 'f-trip', name: 'Triplet', note: 'Rolling threes — trap flow', n: 12, steps: range(12) },
+    { id: 'f-trip2', name: 'Triplet bounce', note: 'Two of every three', n: 12, steps: [0, 1, 3, 4, 6, 7, 9, 10] },
+    { id: 'f-trip3', name: 'Triplet stutter', note: 'Fast threes, spaced', n: 24, steps: [0, 2, 4, 8, 10, 12, 16, 18, 20] },
   ];
-  const flowDots = (steps) => `<span class="fdots" aria-hidden="true">${range(16).map((k) => `<i class="${steps.includes(k) ? 'on' : ''}${k % 4 === 0 ? ' b' : ''}"></i>`).join('')}</span>`;
+  const GRID_NAMES = { 16: '16ths', 12: 'Triplets', 24: 'Fast triplets' };
+  const flowDots = (steps, n = 16) => `<span class="fdots" data-n="${n}" aria-hidden="true">${range(n).map((k) => `<i class="${steps.includes(k) ? 'on' : ''}${k % (n / 4) === 0 ? ' b' : ''}"></i>`).join('')}</span>`;
   const keepFlows = () => db.put('kv', { id: 'flows', list: S.flows });
 
   /**
-   * How a bar's words sit on its steps, all in one sheet: spread evenly, one syllable per step,
-   * or a flow (built-in or saved) — for this bar or its whole section — and saving this bar's rhythm.
+   * Everything about a bar's cadence in one sheet: its grid (16ths or triplets), tapping a new one
+   * in, the cadence library (with a ▶ to hear each), spreading or packing the words, a guide to
+   * write into, and saving this bar's rhythm. For this bar, or its whole section.
    */
   function rhythmSheet(r) {
     const SPREAD = [
@@ -901,15 +952,39 @@ function Editor(id) {
       { name: 'One syllable per step', mode: 'pack', note: 'Fast, from the first step' },
     ];
     const all = [...SPREAD, ...S.flows, ...FLOWS];
-    const has = SH.flowOf(rows[r].cells).length > 0;
+    const R = rows[r], N = R.cells.length, has = SH.flowOf(R.cells).length > 0;
     const sh = sheet({
       title: 'Rhythm',
-      html: `<label class="set-row"><div><div class="lbl">Whole section</div><div class="sub">Every bar until the next blank line or label</div></div><input type="checkbox" class="switch" id="fwhole"></label>
-        ${all.map((fl, i) => `<div class="flow-i"><button class="menu-i" data-fi="${i}">${fl.mode ? `${icon(fl.mode === 'even' ? 'flow' : 'drum')}<span>${esc(fl.name)}</span><small>${esc(fl.note)}</small>` : `${flowDots(fl.steps)}<span>${esc(fl.name)}</span>`}</button>${fl.user ? `<button class="icon-btn muted" data-fdel="${i}" aria-label="Delete ${esc(fl.name)}">${icon('x')}</button>` : ''}</div>`).join('')}
+      html: `<div class="set-row"><div class="lbl">Grid</div><div class="seg" id="fgrid">${SH.GRIDS.map((g) => `<button data-g="${g}" class="${g === N ? 'on' : ''}">${GRID_NAMES[g]}</button>`).join('')}</div></div>
+        <label class="set-row"><div><div class="lbl">Whole section</div><div class="sub">Every bar until the next blank line or label</div></div><input type="checkbox" class="switch" id="fwhole"></label>
+        <button class="btn block ftap" data-a="ftap">${icon('drum', 'sm')}Tap a cadence in</button>
+        ${R.guide ? `<button class="btn block" data-a="fguide">${icon('x', 'sm')}Clear this bar’s guide</button>` : ''}
+        ${all.map((fl, i) => `<div class="flow-i"><button class="menu-i" data-fi="${i}">${fl.mode ? `${icon(fl.mode === 'even' ? 'flow' : 'drum')}<span>${esc(fl.name)}</span>` : `${flowDots(fl.steps, fl.n)}<span>${esc(fl.name)}</span>`}${fl.note ? `<small>${esc(fl.note)}</small>` : ''}</button>${fl.steps ? `<button class="icon-btn muted" data-fplay="${i}" aria-label="Hear ${esc(fl.name)}">${icon('play', 'sm')}</button>` : ''}${fl.user ? `<button class="icon-btn muted" data-fdel="${i}" aria-label="Delete ${esc(fl.name)}">${icon('x')}</button>` : ''}</div>`).join('')}
         ${has ? `<button class="btn block fsave" data-a="fsave">${icon('bank', 'sm')}Save this bar’s rhythm</button>` : ''}`,
-      actions: { fsave: () => { sh.close(); saveFlow(r); } },
+      actions: {
+        fsave: () => { sh.close(); saveFlow(r); },
+        ftap: () => { sh.close(); tapCadence(r); },
+        fguide: () => { sh.close(); delete rows[r].guide; commit(); toast('Guide cleared', { label: 'Undo', fn: undo }); },
+      },
     });
+    const range0 = () => {
+      let a = r, z = r;
+      if ($('#fwhole', sh.el).checked) { while (isBarRow(a - 1)) a--; while (isBarRow(z + 1)) z++; }
+      return [a, z];
+    };
     sh.el.addEventListener('click', (e) => {
+      const g = e.target.closest('[data-g]');
+      if (g) {
+        // switch the grid: every syllable keeps its moment in the bar
+        const n = +g.dataset.g, [a, z] = range0();
+        for (let i = a; i <= z; i++) { rows[i].cells = SH.regrid(rows[i].cells, n); if (rows[i].guide) delete rows[i].guide; }
+        sh.close();
+        commit();
+        toast(`${z > a ? 'Section' : 'Bar'} on ${GRID_NAMES[n].toLowerCase()}`, { label: 'Undo', fn: undo });
+        return;
+      }
+      const pl = e.target.closest('[data-fplay]');
+      if (pl) { const fl = all[+pl.dataset.fplay]; audio.previewRhythm({ steps: fl.steps, n: fl.n || 16, bpm: f.bpm }); return; }
       const del = e.target.closest('[data-fdel]');
       if (del) {
         const fl = all[+del.dataset.fdel];
@@ -921,13 +996,11 @@ function Editor(id) {
       }
       const b = e.target.closest('[data-fi]');
       if (!b) return;
-      const fl = all[+b.dataset.fi];
-      let a = r, z = r;
-      if ($('#fwhole', sh.el).checked) { while (isBarRow(a - 1)) a--; while (isBarRow(z + 1)) z++; }
+      const fl = all[+b.dataset.fi], [a, z] = range0();
       if (z > a) snapshot(f, 'Before a flow over a section');
       for (let i = a; i <= z; i++) {
         const text = barView(rows[i].cells).text;
-        if (text) rows[i].cells = fl.mode ? spreadCells(text, fl.mode) : SH.applyFlow(text, fl.steps);
+        if (text) rows[i].cells = fl.mode ? spreadCells(text, fl.mode, rows[i].cells.length) : SH.applyFlow(text, fl.steps, fl.n || 16);
       }
       sh.close();
       commit();
@@ -935,15 +1008,23 @@ function Editor(id) {
     });
   }
   async function saveFlow(r) {
-    const steps = SH.flowOf(rows[r].cells);
+    const steps = SH.flowOf(rows[r].cells), n = rows[r].cells.length;
     const name = await ask({ title: 'Name this flow', value: `Flow ${S.flows.length + 1}`, ok: 'Save' });
     if (!name) return;
-    S.flows.unshift({ id: FP.uid(), name, steps, user: true });
+    S.flows.unshift({ id: FP.uid(), name, steps, n, user: true });
     keepFlows();
     toast('Saved — find it under Rhythm in any bar’s ⋯ menu');
   }
 
   // ---------------- stats and the syllable target ----------------
+  /** How varied the song's cadences are, and where a run of the same one could switch up. */
+  function cadenceLine() {
+    const bars = rows.filter((r) => r.type === 'bar').map((r) => r.cells);
+    if (bars.filter((c) => c.some((x) => x.trim())).length < 2) return '';
+    const v = FP.cadence.variety(bars);
+    const runs = v.runs.map(([a, z]) => `Bars ${a + 1}–${z + 1} share one cadence — switch it up around bar ${z + 1}?`);
+    return `<p class="cadv"><b>Cadence variety ${Math.round(v.score * 100)}%</b>${runs.length ? runs.map((x) => `<span>${esc(x)}</span>`).join('') : '<span>Your bars switch their cadence up regularly.</span>'}</p>`;
+  }
   VA.stats = () => {
     // sections by their labels (bars before the first label are the top of the song)
     const parts = [];
@@ -969,6 +1050,7 @@ function Editor(id) {
           <div><b>${pct(all.density)}</b><span>words that rhyme</span></div>
           <div><b>${all.multis}</b><span>multi-syllable rhymes</span></div>
         </div>
+        ${cadenceLine()}
         ${all.top.length ? `<div class="sec-h">Top rhyme sounds</div>${all.top.map((fam) => `<p class="fam">${fam.slice(0, 8).map(esc).join(' · ')}</p>`).join('')}` : ''}
         ${parts.length > 1 ? `<div class="sec-h">Sections</div><table class="st-t"><tr><th></th><th>bars</th><th>syl / bar</th><th>rhyme</th></tr>${parts.filter((p) => p.lines.length).map((p) => { const st = syl.stats(p.lines); return `<tr><td>${esc(p.name)}</td><td>${st.lines}</td><td>${avg(st)}</td><td>${pct(st.density)}</td></tr>`; }).join('')}</table>` : ''}
         <p class="src">Words that rhyme: share a rhyme sound with a different word nearby. Multis: runs of 2–3 syllables whose vowels repeat across lines.</p>`,
@@ -1002,7 +1084,7 @@ function Editor(id) {
    * rhymes for that word, so this swaps take → bake). Then the cursor moves on.
    */
   function insertWord(w) {
-    if (!cur) { const r = rows.findIndex((x) => x.type === 'bar'); if (r < 0) return; cur = { r, k: Math.min(15, lastFilled(r) + 1) }; }
+    if (!cur) { const r = rows.findIndex((x) => x.type === 'bar'); if (r < 0) return; cur = { r, k: Math.min(lastStep(r), lastFilled(r) + 1) }; }
     const row = rows[cur.r], k = cur.k;
     const ex = (row.cells[k] || '').trim().replace(/-$/, '');
     let p, swapped = null;
@@ -1015,7 +1097,7 @@ function Editor(id) {
     }
     commit();
     sound();
-    activate(p.r, Math.min(15, p.k + 1), { focus: document.activeElement === inp });
+    activate(p.r, Math.min(lastStep(p.r), p.k + 1), { focus: document.activeElement === inp });
     if (swapped) toast(`Swapped “${swapped}” for “${w}”`, { label: 'Undo', fn: undo });
   }
 
@@ -1179,8 +1261,9 @@ function Editor(id) {
     get nowLine() { return nowLine; }, set nowLine(v) { nowLine = v; },
     get nowStep() { return nowStep; }, set nowStep(v) { nowStep = v; },
     get nowCell() { return nowCell; }, set nowCell(v) { nowCell = v; },
+    undo: () => undo(), saveFlow: (r) => saveFlow(r), flowDots: (s0, n) => flowDots(s0, n), activate: (r, k) => activate(r, k),
   };
-  const { PBeat, PTakes, syncTransport, updateTransportUI, stopPlayer, finishRec, loadTrack } = editorAudio(ed);
+  const { PBeat, PTakes, syncTransport, updateTransportUI, stopPlayer, finishRec, loadTrack, hearBar, tapCadence } = editorAudio(ed);
 
   // ----- Bank panel -----
   function PBank() {

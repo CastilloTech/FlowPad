@@ -349,6 +349,34 @@ a.menu-i { color: var(--text); text-decoration: none; }
 .vtext .vgap { height: 8px; }
 .fsave { margin-top: 12px; }
 
+/* cadence: triplet grids, guides, the pocket, repeats */
+.bgrid[data-n="12"] { grid-template-columns: repeat(6, 1fr); }
+.bgrid[data-n="24"] { grid-template-columns: repeat(8, 1fr); }
+.bgrid[data-n="24"] .cell { height: 34px; }
+@media (min-width: 640px) {
+  .bgrid[data-n="12"], .bgrid[data-n="24"] { grid-template-columns: repeat(12, 1fr); }
+}
+.cell.slot:not(.act) { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 45%, transparent); }
+.cell.slot:not(.act) .ct:empty::before { content: "•"; color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.cell.offp .ct { text-decoration: underline wavy color-mix(in srgb, var(--r0) 80%, transparent); text-underline-offset: 3px; }
+.bh .gtag { margin-left: 6px; padding: 2px 7px; border-radius: 6px; font: 700 10px var(--font); letter-spacing: 0.04em; text-transform: uppercase; color: var(--r3); background: color-mix(in srgb, var(--r3) 15%, transparent); }
+.bh .gtag.guide { color: var(--accent); background: var(--accent-soft); }
+.bh .rp, .bh .pk { margin-right: 8px; font: 700 11px var(--mono); }
+.bh .rp { color: var(--r0); }
+.bh .pk { color: var(--r0); }
+.bh .pk.ok { color: var(--muted); }
+.lg.pkl { width: 12px; height: 2px; border-bottom: 2px dotted var(--r0); border-radius: 0; margin-left: 0; vertical-align: 3px; }
+.cadv { margin: 12px 0 4px; font-size: 14px; }
+.cadv b { display: block; margin-bottom: 2px; }
+.cadv span { display: block; color: var(--muted); }
+.fdots[data-n="12"] { grid-template-columns: repeat(12, 8px); }
+.fdots[data-n="12"] i { width: 8px; }
+.fdots[data-n="24"] { grid-template-columns: repeat(24, 4px); gap: 1px; }
+.fdots[data-n="24"] i { width: 4px; }
+.flow-i .menu-i small { font-size: 12px; }
+.tdots { display: flex; justify-content: center; margin: 4px 0 8px; }
+.ftap { margin: 4px 0 6px; }
+
 /* writing help: target markers, stats, flows */
 .bh .cnt.hi, .bh .cnt.lo { font-weight: 700; }
 .bh .cnt.hi { color: var(--r0); }

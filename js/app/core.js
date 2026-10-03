@@ -144,8 +144,8 @@ function barView0(cells) {
       cur.open = cont;
     });
   });
-  const cls = new Array(16).fill('');
-  const marks = range(16).map(() => new Set());
+  const cls = new Array(cells.length).fill('');
+  const marks = cells.map(() => new Set());
   const text = wordsIn.map((w) => {
     const wt = w.frags.map((x) => x.t).join('');
     const st = syl.analyzeLine(wt).tokens.filter((t) => t.word).flatMap((t) => t.syls.map((s) => s.s));
