@@ -62,7 +62,7 @@ export default [
   },
 
   {
-    name: 'record: count-in, words onto the steps, playback in time, write again',
+    name: 'record: count-in, words onto the steps, playback in time, write again, export with the beat',
     audio: true,
     async run() {
       const { sleep, bars, steps } = E2E;
@@ -113,6 +113,29 @@ export default [
       E2E.menu(/Write its words/).click(); await sleep(2500);
       out.again = steps(bars()[bars().length - 1]);
       out.barsFinal = bars().length;
+      // export it with the beat: the mix must hold the drums, lined up with how they were heard
+      let saved = null;
+      window.download = (name, blob) => { saved = { name, blob }; };
+      document.querySelector('.take [data-a="tmore"]').click(); await sleep(300);
+      E2E.menu(/Export with the beat/).click();
+      for (let i = 0; i < 60 && !document.querySelector('.sheet [data-a="msave"]'); i++) await sleep(100);
+      document.querySelector('.sheet [data-a="msave"]').click(); await sleep(200);
+      out.mixName = saved && saved.name;
+      const ctxA = FP.audio.ensure();
+      const mix = await new Promise((r, j) => saved.blob.arrayBuffer().then((d) => ctxA.decodeAudioData(d, r, j)));
+      const take = await (await new Promise((r) => { const q = indexedDB.open('flowpad'); q.onsuccess = () => { const g = q.result.transaction('recordings').objectStore('recordings').getAll(); g.onsuccess = () => r(g.result[0]); }; })).blob.arrayBuffer().then((d) => new Promise((r, j) => ctxA.decodeAudioData(d, r, j)));
+      const tl = (await new Promise((r) => { const q = indexedDB.open('flowpad'); q.onsuccess = () => { const g = q.result.transaction('recordings').objectStore('recordings').getAll(); g.onsuccess = () => r(g.result[0].timing); }; }));
+      // Boom Bap kicks on steps 1, 8, 11 of each bar — step 8 (index 7) is odd, where the voice is silent
+      const kick = tl.log.find((e) => e.bar === 0 && e.step === 7).t + (tl.lat || 0) + 0.02;
+      const rms = (buf, a, b) => { const x = buf.getChannelData(0), r = buf.sampleRate; let s2 = 0, n = 0; for (let i = Math.floor(a * r); i < Math.floor(b * r); i++) { s2 += x[i] * x[i]; n++; } return Math.sqrt(s2 / Math.max(1, n)); };
+      // where the voice is silent, the first sound in the mix is the kick: when does it start?
+      let onset = null;
+      for (let a = kick - 0.004; a < kick + 0.08; a += 0.005) if (rms(mix, a, a + 0.005) > 0.05) { onset = a; break; }
+      out.mix = {
+        seconds: +mix.duration.toFixed(1), takeSeconds: +take.duration.toFixed(1), channels: mix.numberOfChannels,
+        kickOffMs: onset == null ? null : Math.round((onset - kick) * 1000),
+        kickNotInTake: rms(take, kick, kick + 0.06) < 0.01,
+      };
       return out;
     },
     check(r, assert) {
@@ -126,11 +149,16 @@ export default [
       assert.ok(r.stopped);
       assert.equal(r.again, WORDS);
       assert.equal(r.barsFinal, r.barsAfter + 1);
+      assert.match(r.mixName, /\(with beat\)\.wav$/);
+      assert.equal(r.mix.channels, 2);
+      assert.ok(Math.abs(r.mix.seconds - r.mix.takeSeconds) <= 0.5, `mix ${r.mix.seconds}s vs take ${r.mix.takeSeconds}s`);
+      assert.ok(r.mix.kickNotInTake, 'the voice-only take is silent where the kick lands');
+      assert.ok(r.mix.kickOffMs != null && Math.abs(r.mix.kickOffMs) <= 20, `the kick should start where it was heard (off by ${r.mix.kickOffMs} ms)`);
     },
   },
 
   {
-    name: 'beat: import, tempo guess, drums layer, remove',
+    name: 'beat: import, tempo guess, line up bar 1, drums layer, remove',
     audio: true,
     async run() {
       const { sleep } = E2E;
@@ -153,6 +181,12 @@ export default [
       E2E.choose(document.querySelector('#tfile'), new File([wav], 'Night Drive 90bpm.wav', { type: 'audio/wav' })); await sleep(1500);
       const form = document.querySelector('.beatform');
       out.form = { bpm: form.elements.bpm.value, bars: form.elements.bars.value };
+      // line it up: two nudges of +10 ms, and a listen
+      [...form.querySelectorAll('[data-a="bn"]')].find((b) => b.dataset.d === '0.01').click();
+      [...form.querySelectorAll('[data-a="bn"]')].find((b) => b.dataset.d === '0.01').click();
+      form.querySelector('[data-a="bprev"]').click(); await sleep(300);
+      out.nudged = form.elements.offset.value;
+      form.querySelector('[data-a="bprev"]').click(); // stop
       form.requestSubmit(); await sleep(600);
       out.trackbox = document.querySelector('.trackbox .tsub')?.textContent;
       out.dotsUnderBeat = document.querySelectorAll('.cell .dr i').length;
@@ -170,6 +204,7 @@ export default [
       assert.ok(r.dotsBefore > 0);
       assert.equal(r.guessed, '90');
       assert.deepEqual(r.form, { bpm: '90', bars: '4' });
+      assert.equal(r.nudged, '0.02');
       assert.equal(r.trackbox, '90 BPM · 4-bar loop');
       assert.equal(r.dotsUnderBeat, 0);
       assert.equal(r.playing, true);
@@ -386,6 +421,80 @@ export default [
       assert.equal(r.afterShort, r.afterDup);
       assert.ok(r.sheetClosed);
       assert.ok(r.panelClosed);
+    },
+  },
+
+  {
+    name: 'headphone delay: tapping 150 ms after the clicks measures about 150 ms, and it\'s used',
+    audio: true,
+    async run() {
+      const { sleep } = E2E;
+      if (!(await E2E.audioRuns())) return { skipped: 'audio clock does not run here' };
+      document.querySelector('[data-a="settings"]').click(); await sleep(300);
+      document.querySelector('#cal').click(); await sleep(300);
+      const tap = document.querySelector('#ctap');
+      document.querySelector('#cgo').click();
+      const t0 = FP.audio.now() + 0.8;
+      // tap 150 ms after every click (the clicks are 0.6 s apart)
+      for (let i = 0; i < 16; i++) {
+        const due = t0 + i * 0.6 + 0.15;
+        while (FP.audio.now() < due) await sleep(4);
+        tap.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerType: 'touch' }));
+      }
+      await sleep(1200);
+      return { result: document.querySelector('#cres').textContent, used: Math.round(FP.audio.latency() * 1000), shown: document.querySelector('#calv').textContent };
+    },
+    check(r, assert) {
+      const ms = +(r.result.match(/Measured (\d+) ms/) || [])[1];
+      assert.ok(Math.abs(ms - 150) <= 25, r.result);
+      assert.equal(r.used, ms);
+      assert.equal(r.shown, `${ms} ms · measured`);
+    },
+  },
+
+  {
+    name: 'writing help: syllable target marks bars, stats, flows applied and saved',
+    async run() {
+      const { sleep, bars, steps } = E2E;
+      document.querySelector('.row').click(); await sleep(500);
+      const out = {};
+      // stats + a target of 10: the sample's 13- and 14-syllable bars are marked over, the 8s under
+      document.querySelector('#stat').click(); await sleep(300);
+      out.tiles = [...document.querySelectorAll('.tiles b')].map((b) => b.textContent);
+      out.sections = [...document.querySelectorAll('.st-t td:first-child')].map((td) => td.textContent);
+      const up = document.querySelector('[data-a="tup"]'), dn = document.querySelector('[data-a="tdn"]');
+      dn.click(); await sleep(50); // from the average (12) down to 11
+      dn.click(); await sleep(150);
+      out.target = document.querySelector('#tgv').textContent;
+      document.querySelector('.sheet [data-close]').click(); await sleep(300);
+      out.marks = [...document.querySelectorAll('.bh .cnt')].map((c) => c.textContent.replace(/\s+/g, ' ').trim());
+      // apply "On the beat" to bar 1: its 8 syllables go on steps 1, 5, 9, 13 (the rest share 13)
+      bars()[0].querySelector('[data-a="bar-menu"]').click(); await sleep(300);
+      E2E.menu(/Apply a flow/).click(); await sleep(300);
+      [...document.querySelectorAll('.flow-i .menu-i')].find((b) => /On the beat/.test(b.textContent)).click(); await sleep(300);
+      out.applied = steps(bars()[0]);
+      out.toast = document.querySelector('#toast').textContent;
+      E2E.toastAct().click(); await sleep(250);
+      out.undone = steps(bars()[0]);
+      // save bar 2's rhythm and find it in the list
+      bars()[1].querySelector('[data-a="bar-menu"]').click(); await sleep(300);
+      E2E.menu(/Save this flow/).click(); await sleep(300);
+      const f = document.querySelector('.sheet input'); f.value = 'My flow'; f.form.requestSubmit(); await sleep(300);
+      bars()[0].querySelector('[data-a="bar-menu"]').click(); await sleep(300);
+      E2E.menu(/Apply a flow/).click(); await sleep(300);
+      out.flows = [...document.querySelectorAll('.flow-i .menu-i > span:not(.fdots)')].map((s) => s.textContent);
+      return out;
+    },
+    check(r, assert) {
+      assert.equal(r.tiles[0], '6');
+      assert.deepEqual(r.sections, ['Verse 1', 'Hook']);
+      assert.equal(r.target, '10');
+      assert.deepEqual(r.marks.slice(0, 3), ['8 syl −2', '13 syl +3', '10 syl']);
+      assert.equal(r.applied, 'Late · · · night, · · · pen · · · tight, city lights glow · · ·');
+      assert.match(r.toast, /“On the beat” appliedUndo/);
+      assert.ok(r.undone.startsWith('Late'), r.undone);
+      assert.equal(r.flows[0], 'My flow');
+      assert.ok(r.flows.includes('Straight 8ths'));
     },
   },
 

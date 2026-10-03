@@ -71,3 +71,14 @@ test('pullAt removes a step and pulls the rest back', () => {
   SH.pullAt(rows[0], 1);
   assert.equal(show(rows[0]), 'a b c');
 });
+
+test('applyFlow lays a line onto a rhythm: one syllable per hit, the rest share the last hit', () => {
+  const show = (cells) => cells.map((c) => c || '.').join(' ').replace(/( \.)+$/, '');
+  assert.equal(show(SH.applyFlow('city lights glow', [0, 3, 6, 8, 11, 14])), 'ci- . . ty . . lights . glow');
+  assert.equal(show(SH.applyFlow('late night pen tight', [0, 4])), 'late . . . night pen tight');
+  assert.ok(SH.applyFlow('one two', []).every((c) => c === ''), 'no hits: all rests');
+});
+
+test('flowOf is the steps a bar hits', () => {
+  assert.deepEqual(SH.flowOf(['a', '', 'b', '', '', 'c-', ...new Array(10).fill('')]), [0, 2, 5]);
+});

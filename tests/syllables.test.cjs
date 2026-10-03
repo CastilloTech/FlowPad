@@ -60,3 +60,14 @@ test('rhyme keys match rhyming words', () => {
   assert.equal(syl.rhymeKey('night'), syl.rhymeKey('tight'));
   assert.notEqual(syl.rhymeKey('night'), syl.rhymeKey('flow'));
 });
+
+test('stats: syllables, rhyme density, multis, top rhyme sounds', () => {
+  const s = syl.stats(['Late night, pen tight, city lights glow', 'Ten bites, then the pity nights go', 'I take the money then I run', 'watch it bake in the sun']);
+  assert.equal(s.lines, 4);
+  assert.equal(s.syllables, 8 + 8 + 8 + 6);
+  assert.ok(s.rhyming >= 8, `rhyming ${s.rhyming}`); // night/tight/bites/lights/nights…, take/bake, run/sun
+  assert.ok(s.density > 0.4 && s.density <= 1);
+  assert.equal(s.multis, 4); // "pen tight" / "Ten bites", "city lights" / "pity nights"
+  assert.ok(s.top[0].length >= 4, 'the biggest rhyme family comes first');
+  assert.ok(s.top[0].includes('night') && s.top[0].includes('tight'), `top: ${s.top[0]}`);
+});

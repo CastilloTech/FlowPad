@@ -3,6 +3,7 @@
   'use strict';
   const FP = (window.FP = window.FP || {});
   let ctx = null, out = null, noise = null;
+  let userLat = null; // seconds, measured by the headphone delay test (null = trust the browser)
 
   function ensure() {
     if (!ctx) {
@@ -15,9 +16,8 @@
       out.gain.value = 0.85;
       out.connect(comp);
       comp.connect(ctx.destination);
-      noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
-      const d = noise.getChannelData(0);
-      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      noise = makeNoise(ctx);
+      voices = makeVoices(ctx, out, noise);
     }
     if (ctx.state !== 'running') ctx.resume();
     return ctx;
@@ -29,82 +29,92 @@
     param.exponentialRampToValueAtTime(0.0001, t + attack + decay);
   }
 
-  function noiseSrc(t, dur) {
-    const s = ctx.createBufferSource();
-    s.buffer = noise;
-    s.start(t, Math.random() * 0.5);
-    s.stop(t + dur);
-    return s;
+  /** White noise for the snare, clap and hats, made once per audio context. */
+  function makeNoise(c) {
+    const n = c.createBuffer(1, c.sampleRate, c.sampleRate);
+    const d = n.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    return n;
   }
 
-  function filter(type, freq, q = 0.7) {
-    const f = ctx.createBiquadFilter();
-    f.type = type;
-    f.frequency.value = freq;
-    f.Q.value = q;
-    return f;
+  /** The drum kit, playing into `dest` on audio context `c` (live, or offline for an export). */
+  function makeVoices(c, dest, noiseBuf) {
+    function noiseSrc(t, dur) {
+      const s = c.createBufferSource();
+      s.buffer = noiseBuf;
+      s.start(t, Math.random() * 0.5);
+      s.stop(t + dur);
+      return s;
+    }
+    function filter(type, freq, q = 0.7) {
+      const f = c.createBiquadFilter();
+      f.type = type;
+      f.frequency.value = freq;
+      f.Q.value = q;
+      return f;
+    }
+    return {
+      kick(t, v = 1) {
+        const o = c.createOscillator(), g = c.createGain();
+        o.frequency.setValueAtTime(160, t);
+        o.frequency.exponentialRampToValueAtTime(42, t + 0.13);
+        env(g.gain, t, 1.0 * v, 0.003, 0.42);
+        o.connect(g).connect(dest);
+        o.start(t); o.stop(t + 0.5);
+      },
+      snare(t, v = 1) {
+        const n = noiseSrc(t, 0.25), g = c.createGain();
+        env(g.gain, t, 0.55 * v, 0.002, 0.17);
+        n.connect(filter('highpass', 1400)).connect(g).connect(dest);
+        const o = c.createOscillator(), g2 = c.createGain();
+        o.type = 'triangle';
+        o.frequency.setValueAtTime(220, t);
+        o.frequency.exponentialRampToValueAtTime(160, t + 0.08);
+        env(g2.gain, t, 0.45 * v, 0.002, 0.09);
+        o.connect(g2).connect(dest);
+        o.start(t); o.stop(t + 0.15);
+      },
+      clap(t, v = 1) {
+        const n = noiseSrc(t, 0.3), g = c.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        for (let k = 0; k < 3; k++) {
+          const s = t + k * 0.011;
+          g.gain.setValueAtTime(0.6 * v, s);
+          g.gain.exponentialRampToValueAtTime(0.05, s + 0.009);
+        }
+        g.gain.setValueAtTime(0.5 * v, t + 0.035);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+        n.connect(filter('bandpass', 1300, 1.2)).connect(g).connect(dest);
+      },
+      hat(t, v = 1) {
+        const n = noiseSrc(t, 0.08), g = c.createGain();
+        env(g.gain, t, 0.28 * v, 0.001, 0.045);
+        n.connect(filter('highpass', 7500)).connect(g).connect(dest);
+      },
+      open(t, v = 1) {
+        const n = noiseSrc(t, 0.4), g = c.createGain();
+        env(g.gain, t, 0.24 * v, 0.002, 0.3);
+        n.connect(filter('highpass', 6500)).connect(g).connect(dest);
+      },
+      /** A soft tick for a word landing on a step. */
+      tick(t) {
+        const o = c.createOscillator(), g = c.createGain();
+        o.frequency.value = 2200;
+        env(g.gain, t, 0.05, 0.001, 0.03);
+        o.connect(g).connect(dest);
+        o.start(t); o.stop(t + 0.05);
+      },
+      click(t, accent) {
+        const o = c.createOscillator(), g = c.createGain();
+        o.type = 'square';
+        o.frequency.value = accent ? 1760 : 1180;
+        env(g.gain, t, accent ? 0.35 : 0.2, 0.001, 0.04);
+        o.connect(filter('lowpass', 5000)).connect(g).connect(dest);
+        o.start(t); o.stop(t + 0.06);
+      },
+    };
   }
-
-  const voices = {
-    kick(t, v = 1) {
-      const o = ctx.createOscillator(), g = ctx.createGain();
-      o.frequency.setValueAtTime(160, t);
-      o.frequency.exponentialRampToValueAtTime(42, t + 0.13);
-      env(g.gain, t, 1.0 * v, 0.003, 0.42);
-      o.connect(g).connect(out);
-      o.start(t); o.stop(t + 0.5);
-    },
-    snare(t, v = 1) {
-      const n = noiseSrc(t, 0.25), g = ctx.createGain();
-      env(g.gain, t, 0.55 * v, 0.002, 0.17);
-      n.connect(filter('highpass', 1400)).connect(g).connect(out);
-      const o = ctx.createOscillator(), g2 = ctx.createGain();
-      o.type = 'triangle';
-      o.frequency.setValueAtTime(220, t);
-      o.frequency.exponentialRampToValueAtTime(160, t + 0.08);
-      env(g2.gain, t, 0.45 * v, 0.002, 0.09);
-      o.connect(g2).connect(out);
-      o.start(t); o.stop(t + 0.15);
-    },
-    clap(t, v = 1) {
-      const n = noiseSrc(t, 0.3), g = ctx.createGain();
-      g.gain.setValueAtTime(0.0001, t);
-      for (let k = 0; k < 3; k++) {
-        const s = t + k * 0.011;
-        g.gain.setValueAtTime(0.6 * v, s);
-        g.gain.exponentialRampToValueAtTime(0.05, s + 0.009);
-      }
-      g.gain.setValueAtTime(0.5 * v, t + 0.035);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
-      n.connect(filter('bandpass', 1300, 1.2)).connect(g).connect(out);
-    },
-    hat(t, v = 1) {
-      const n = noiseSrc(t, 0.08), g = ctx.createGain();
-      env(g.gain, t, 0.28 * v, 0.001, 0.045);
-      n.connect(filter('highpass', 7500)).connect(g).connect(out);
-    },
-    open(t, v = 1) {
-      const n = noiseSrc(t, 0.4), g = ctx.createGain();
-      env(g.gain, t, 0.24 * v, 0.002, 0.3);
-      n.connect(filter('highpass', 6500)).connect(g).connect(out);
-    },
-    /** A soft tick for a word landing on a step. */
-    tick(t) {
-      const o = ctx.createOscillator(), g = ctx.createGain();
-      o.frequency.value = 2200;
-      env(g.gain, t, 0.05, 0.001, 0.03);
-      o.connect(g).connect(out);
-      o.start(t); o.stop(t + 0.05);
-    },
-    click(t, accent) {
-      const o = ctx.createOscillator(), g = ctx.createGain();
-      o.type = 'square';
-      o.frequency.value = accent ? 1760 : 1180;
-      env(g.gain, t, accent ? 0.35 : 0.2, 0.001, 0.04);
-      o.connect(filter('lowpass', 5000)).connect(g).connect(out);
-      o.start(t); o.stop(t + 0.06);
-    },
-  };
+  let voices = null; // the live kit, made with the audio context
 
   // ---------- transport ----------
   // log: when each step actually sounds ({ t, bar, step, n }), so a recording can be mapped back onto the grid
@@ -142,7 +152,7 @@
   function frame() {
     const c = tr.cfg;
     if (!c) return;
-    const now = ctx.currentTime - (ctx.outputLatency || 0);
+    const now = ctx.currentTime - latency();
     if (tr.queue.length > 64) tr.queue.splice(0, tr.queue.length - 16); // back from a background tab
     while (tr.queue.length && tr.queue[0].t <= now) {
       const s = tr.queue.shift();
@@ -204,6 +214,87 @@
     stopLoops();
     if (c.onStop) c.onStop();
     emit();
+  }
+
+  function latency() {
+    if (userLat != null) return userLat;
+    return ctx ? (ctx.outputLatency || 0) + (ctx.baseLatency || 0) : 0;
+  }
+
+  /**
+   * Hear where bar 1 of an imported beat falls: `bars` bars of it from `offset`, with a click on
+   * every beat on top. Returns a stop function.
+   */
+  function previewBeat({ buffer, offset, bpm, bars = 2 }) {
+    ensure();
+    stop();
+    const t0 = ctx.currentTime + 0.1, beat = 60 / bpm, srcs = [];
+    const src = ctx.createBufferSource(), g = ctx.createGain();
+    src.buffer = buffer;
+    g.gain.value = 0.9;
+    src.connect(g).connect(ctx.destination);
+    src.start(t0, Math.max(0, offset));
+    src.stop(t0 + bars * 4 * beat);
+    srcs.push(src);
+    for (let i = 0; i < bars * 4; i++) voices.click(t0 + i * beat, i % 4 === 0);
+    return () => srcs.forEach((x) => { try { x.stop(); } catch (e) { /* done */ } });
+  }
+
+  /**
+   * Mix a take with the beat it was recorded over, offline (faster than real time).
+   * steps: the transport log of the take ({ t, bar, step } in seconds from its start);
+   * getBar(bar) → that bar's drum pattern or null; track: an imported beat
+   * ({ buffer, offset, bars, bpm, rate }) or null; lag: how much later than the beat the voice
+   * landed on the recording (speaker + mic delay). Returns a stereo AudioBuffer.
+   */
+  async function renderMix({ voice, steps, getBar, track, lag = 0, songBpm }) {
+    const rate = 44100, OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const off = new OAC(2, Math.ceil((voice.duration + 0.4) * rate), rate);
+    // a gentle limiter on the whole mix, so the beat and the voice together never clip
+    const master = off.createDynamicsCompressor();
+    master.threshold.value = -6; master.knee.value = 6; master.ratio.value = 12; master.attack.value = 0.003; master.release.value = 0.15;
+    master.connect(off.destination);
+    // drums through the same bus as live
+    const bus = off.createGain(), comp = off.createDynamicsCompressor();
+    bus.gain.value = 0.85; comp.threshold.value = -12; comp.ratio.value = 4;
+    bus.connect(comp).connect(master);
+    const kit = makeVoices(off, bus, makeNoise(off));
+    const end = voice.duration;
+    for (const s of steps) {
+      const t = s.t + lag;
+      if (s.bar < 0 || t < 0 || t > end) continue; // no count-in clicks in the mix
+      const pat = getBar ? getBar(s.bar) : null;
+      if (pat) for (const k of ['kick', 'snare', 'clap', 'hat', 'open']) { const v = pat[k] && pat[k][s.step]; if (v) kit[k](t, v > 1 ? 1.25 : 1); }
+      if (track && s.step === 0 && s.bar % track.bars === 0) {
+        const src = off.createBufferSource(), g = off.createGain();
+        src.buffer = track.buffer;
+        src.playbackRate.value = track.rate || 1;
+        g.gain.value = 0.9;
+        src.connect(g).connect(master);
+        src.start(t, Math.max(0, track.offset || 0));
+        src.stop(t + (track.bars * 240) / songBpm);
+      }
+    }
+    const vs = off.createBufferSource();
+    vs.buffer = voice;
+    vs.connect(master);
+    vs.start(0);
+    return off.startRendering();
+  }
+
+  /** A 16-bit PCM WAV file from an AudioBuffer. */
+  function encodeWav(buffer) {
+    const ch = buffer.numberOfChannels, len = buffer.length, rate = buffer.sampleRate;
+    const v = new DataView(new ArrayBuffer(44 + len * ch * 2));
+    const w = (o, str) => { for (let i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); };
+    w(0, 'RIFF'); v.setUint32(4, 36 + len * ch * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, ch, true); v.setUint32(24, rate, true);
+    v.setUint32(28, rate * ch * 2, true); v.setUint16(32, ch * 2, true); v.setUint16(34, 16, true);
+    w(36, 'data'); v.setUint32(40, len * ch * 2, true);
+    const data = Array.from({ length: ch }, (_, c) => buffer.getChannelData(c));
+    let o = 44;
+    for (let i = 0; i < len; i++) for (let c = 0; c < ch; c++, o += 2) v.setInt16(o, Math.max(-1, Math.min(1, data[c][i])) * 0x7fff, true);
+    return new Blob([v], { type: 'audio/wav' });
   }
 
   // ---------- imported beats: an audio loop started on bar lines ----------
@@ -307,8 +398,14 @@
       return () => { src.onended = null; try { src.stop(); } catch (e) { /* done */ } };
     },
     now: () => (ctx ? ctx.currentTime : 0),
-    /** Seconds between a sound being scheduled/captured and it being heard/recorded. */
-    latency: () => (ctx ? (ctx.outputLatency || 0) + (ctx.baseLatency || 0) : 0),
+    /** Seconds between a sound being scheduled and heard (and the voice reaching the recorder). */
+    latency,
+    /** The measured headphone delay in seconds, or null to go back to what the browser reports. */
+    setLatency(s) { userLat = s == null ? null : Math.max(0, Math.min(0.6, s)); },
+    clickAt(t, accent) { ensure(); voices.click(t, accent); },
+    previewBeat,
+    renderMix,
+    encodeWav,
     on(fn) { listeners.add(fn); return () => listeners.delete(fn); },
   };
 })();

@@ -421,6 +421,43 @@
     return out;
   }
 
+  /**
+   * How a block of lines is written: syllables, words, how many of its words rhyme with a
+   * different word in the block (density), multi-syllable rhymes (chain runs), and the rhyme
+   * sounds used most, each with its words.
+   */
+  function stats(lines) {
+    let syllables = 0, words = 0;
+    const fam = new Map(); // rhyme key → the different words with it
+    const keyed = [];
+    lines.forEach((l) => {
+      const a = analyzeLine(l);
+      syllables += a.count;
+      a.tokens.forEach((t) => {
+        if (!t.word || (t.syls[0] && t.syls[0].num)) return;
+        const w = clean(t.text).replace(/'/g, '');
+        if (!w || (t.n === 1 && FUNC.has(w))) return;
+        words++;
+        const k = rhymeKey(t.text);
+        if (!k) return;
+        keyed.push(k);
+        if (!fam.has(k)) fam.set(k, new Set());
+        fam.get(k).add(w);
+      });
+    });
+    const rhyming = keyed.filter((k) => fam.get(k).size > 1).length;
+    const ch = chains(lines);
+    const runs = new Map(); // chain id → how many places it shows up
+    ch.forEach((row) => { let prev = -1; row.forEach((id) => { if (id >= 0 && id !== prev) runs.set(id, (runs.get(id) || 0) + 1); prev = id; }); });
+    const top = [...fam.entries()].filter(([, s]) => s.size > 1).sort((a, b) => b[1].size - a[1].size).slice(0, 3).map(([, s]) => [...s]);
+    return {
+      lines: lines.length, syllables, words, rhyming,
+      density: words ? rhyming / words : 0,
+      multis: [...runs.values()].reduce((a, n) => a + n, 0),
+      top,
+    };
+  }
+
   const lineCount = (line) => analyzeLine(line).count;
   const count = (text) => (String(text).match(/[A-Za-z0-9'’]+/g) || []).reduce((a, w) => a + wordInfo(w).n, 0);
 
@@ -498,6 +535,7 @@
     analyzeLine,
     wordInfo,
     chains,
+    stats,
     rhymeKey,
     vowelKey,
     heurCount,

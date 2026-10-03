@@ -324,7 +324,45 @@ a.menu-i { color: var(--text); text-decoration: none; }
 /* ---------- the flow sheet: each line is a bar written on its grid ---------- */
 .page.ws { padding-bottom: calc(var(--dock-h, 140px) + 16px); }
 .write-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 2px 0 10px; }
-.write-meta .stat { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.write-meta .stat { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; height: 40px; text-decoration: underline dotted color-mix(in srgb, var(--muted) 50%, transparent); text-underline-offset: 4px; }
+
+/* writing help: target markers, stats, flows */
+.bh .cnt.hi, .bh .cnt.lo { font-weight: 700; }
+.bh .cnt.hi { color: var(--r0); }
+.bh .cnt.lo { color: var(--r1); }
+.bh .cnt b { font-weight: 800; }
+.nudge { display: flex; align-items: center; gap: 6px; flex: none; }
+.nudge .btn { height: 38px; min-width: 42px; padding: 0 10px; font-size: 14px; }
+.nudge b { min-width: 34px; text-align: center; font: 700 18px var(--mono); }
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 14px 0 4px; }
+.tiles div { background: var(--surface-2); border-radius: 14px; padding: 12px 14px; }
+.tiles b { display: block; font: 700 24px var(--mono); letter-spacing: -0.02em; }
+.tiles span { font-size: 12px; color: var(--muted); }
+.fam { margin: 4px 0; font-size: 14px; }
+.st-t { width: 100%; border-collapse: collapse; font-size: 14px; }
+.st-t th { font-size: 11px; font-weight: 650; color: var(--muted); text-align: right; padding: 4px 6px; }
+.st-t td { padding: 8px 6px; border-top: 1px solid var(--line); text-align: right; font-family: var(--mono); }
+.st-t td:first-child { text-align: left; font-family: var(--font); font-weight: 600; }
+.flow-i { display: flex; align-items: center; }
+.flow-i .menu-i { flex: 1; }
+.fdots { display: inline-grid; grid-template-columns: repeat(16, 6px); gap: 2px; flex: none; }
+.menu-i .fdots { flex: none; margin-right: 4px; } /* not stretched like the label */
+.fdots i { width: 6px; height: 14px; border-radius: 2px; background: var(--surface-3); }
+.fdots i.b { background: color-mix(in srgb, var(--surface-3) 60%, var(--muted)); }
+.fdots i.on { background: var(--accent); }
+.lineup .nudge .btn { min-width: 0; padding: 0 9px; }
+
+/* headphone delay test */
+.tapbig {
+  display: block; width: 100%; height: 150px; margin: 6px 0 12px; border-radius: 22px;
+  background: var(--accent); color: var(--accent-ink); font: 750 20px var(--font); touch-action: manipulation;
+}
+.tapbig:disabled { background: var(--surface-2); color: var(--faint); }
+.tapbig.hit { animation: tapped 0.15s ease-out; }
+@keyframes tapped { from { transform: scale(0.96); filter: brightness(1.25); } }
+.cal-dots { display: flex; justify-content: center; gap: 6px; margin-bottom: 6px; }
+.cal-dots i { width: 9px; height: 9px; border-radius: 50%; background: var(--surface-3); }
+.cal-dots i.on { background: var(--accent); }
 .ur { display: flex; flex: none; }
 .ur .icon-btn { width: 40px; height: 40px; }
 .ur .icon-btn:disabled { opacity: 0.3; cursor: default; background: none; }

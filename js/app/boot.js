@@ -26,6 +26,8 @@ async function load() {
   }
   const [projects, folders, files, patterns] = await Promise.all(['projects', 'folders', 'files', 'patterns'].map((s) => db.all(s)));
   const st = kv.find((x) => x.id === 'settings');
+  const fl = kv.find((x) => x.id === 'flows');
+  S.flows = fl ? fl.list : [];
   if (st) Object.assign(S.settings, st);
   S.projects = projects;
   S.folders = folders;
@@ -53,6 +55,7 @@ words.setCorpus(() => S.files.map((f) => f.text).join('\n'));
     return;
   }
   syl.online = S.settings.online;
+  audio.setLatency(S.settings.latencyMs != null ? S.settings.latencyMs / 1000 : null); // the measured headphone delay
   S.settings.opens = (S.settings.opens || 0) + 1;
   saveSettings();
   applyTheme();

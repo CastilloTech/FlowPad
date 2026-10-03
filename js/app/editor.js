@@ -89,7 +89,7 @@ function Editor(id) {
 
   view.innerHTML = `<div class="page ws">
     <div class="write-meta">
-      <span class="stat" id="stat"></span>
+      <button class="stat" id="stat" data-a="stats" aria-label="Song stats and syllable target"></button>
       <span class="ur"><button class="icon-btn" id="bundo" data-a="undo" aria-label="Undo" title="Undo (Ctrl+Z)" disabled>${icon('undo')}</button><button class="icon-btn" id="bredo" data-a="redo" aria-label="Redo" title="Redo (Ctrl+Shift+Z)" disabled>${icon('redo')}</button></span>
       <button class="chip sm" data-a="fdef" aria-label="Song beat">${icon('drum', 'sm')}<span id="songbeat">${esc(patName(f.beat.def))}</span></button>
     </div>
@@ -223,12 +223,14 @@ function Editor(id) {
     const steps = beatOff ? null : barSteps(f, i);
     const has = (k, ...ts) => steps && ts.some((t) => steps[t] && steps[t][k]);
     const cnt = syl.lineCount(v.text);
+    // more than one syllable off the song's target: marked (+3 over, −2 under)
+    const off = f.target && cnt ? cnt - f.target : 0, miss = Math.abs(off) > 1;
     // a bar shows its pattern only when it has its own; otherwise a quiet drum button opens the choice
     const pat = beatOff ? '' : row.pat
       ? `<button class="pat-btn set" data-a="bar-pat" data-r="${i}" data-n="${n}">${esc(patName(row.pat))}</button>`
       : `<button class="icon-btn pat-i" data-a="bar-pat" data-r="${i}" data-n="${n}" aria-label="Beat for bar ${n}: ${esc(patName(f.beat.def))}" title="Beat: ${esc(patName(f.beat.def))}">${icon('drum', 'sm')}</button>`;
     return `<div class="blk bar" data-r="${i}">
-        <div class="bh"><span class="bar-n">${n}</span>${pat}<span class="grow"></span><span class="cnt">${cnt} syl</span><button class="icon-btn bm" data-a="bar-menu" data-r="${i}" data-n="${n}" aria-label="Bar ${n} options">${icon('more')}</button></div>
+        <div class="bh"><span class="bar-n">${n}</span>${pat}<span class="grow"></span><span class="cnt${miss ? (off > 0 ? ' hi' : ' lo') : ''}"${miss ? ` title="${off > 0 ? off + ' over' : -off + ' under'} the ${f.target}-syllable target"` : ''}>${cnt} syl${miss ? ` <b>${off > 0 ? '+' : '−'}${Math.abs(off)}</b>` : ''}</span><button class="icon-btn bm" data-a="bar-menu" data-r="${i}" data-n="${n}" aria-label="Bar ${n} options">${icon('more')}</button></div>
         <div class="bline" data-a="bar-go" data-r="${i}">${v.text ? lineHTML(v.text, color, mk) : '<span class="ph-t2">Tap a step to write</span>'}</div>
         <div class="bgrid">${range(16).map((k) => {
           const raw = (row.cells[k] || '').trim();
@@ -864,6 +866,8 @@ function Editor(id) {
       items: [
         { label: 'Spread syllables evenly', icon: 'flow', onClick: () => reflow('even') },
         { label: 'One syllable per step', icon: 'drum', hint: 'Fast 16th-note flow', onClick: () => reflow('pack') },
+        { label: 'Apply a flow…', icon: 'loop', hint: 'Lay it out on a saved rhythm', onClick: () => flowSheet(r) },
+        ...(SH.flowOf(row.cells).length ? [{ label: 'Save this flow', icon: 'bank', hint: 'Keep its rhythm to reuse', onClick: () => saveFlow(r) }] : []),
         { label: 'Insert bar above', icon: 'plus', onClick: () => { if (cur && cur.r >= r) cur.r++; insertBar(r); activate(r, 0); } },
         { label: 'Insert bar below', icon: 'plus', onClick: () => { if (cur && cur.r > r) cur.r++; insertBar(r + 1); activate(r + 1, 0); } },
         { label: 'Clear bar', icon: 'x', onClick: () => { row.cells = newBarRow().cells; commit(); } },
@@ -878,6 +882,100 @@ function Editor(id) {
         },
       ],
     });
+  };
+
+  // ---------------- flows: a bar's rhythm, saved and laid onto other bars ----------------
+  const FLOWS = [
+    { id: 'f-beat', name: 'On the beat', steps: [0, 4, 8, 12] },
+    { id: 'f-8ths', name: 'Straight 8ths', steps: [0, 2, 4, 6, 8, 10, 12, 14] },
+    { id: 'f-push', name: 'Syncopated', steps: [0, 3, 6, 8, 11, 14] },
+    { id: 'f-lazy', name: 'Laid back', steps: [2, 6, 10, 14] },
+    { id: 'f-16ths', name: 'Double time', steps: range(16) },
+  ];
+  const flowDots = (steps) => `<span class="fdots" aria-hidden="true">${range(16).map((k) => `<i class="${steps.includes(k) ? 'on' : ''}${k % 4 === 0 ? ' b' : ''}"></i>`).join('')}</span>`;
+  const keepFlows = () => db.put('kv', { id: 'flows', list: S.flows });
+
+  function flowSheet(r) {
+    const all = [...S.flows, ...FLOWS];
+    const sh = sheet({
+      title: 'Apply a flow',
+      html: `<label class="set-row"><div><div class="lbl">Whole section</div><div class="sub">Every bar until the next blank line or label</div></div><input type="checkbox" class="switch" id="fwhole"></label>
+        ${all.map((fl, i) => `<div class="flow-i"><button class="menu-i" data-fi="${i}">${flowDots(fl.steps)}<span>${esc(fl.name)}</span></button>${fl.user ? `<button class="icon-btn muted" data-fdel="${i}" aria-label="Delete ${esc(fl.name)}">${icon('x')}</button>` : ''}</div>`).join('')}`,
+    });
+    sh.el.addEventListener('click', (e) => {
+      const del = e.target.closest('[data-fdel]');
+      if (del) {
+        const fl = all[+del.dataset.fdel];
+        S.flows = S.flows.filter((x) => x !== fl);
+        keepFlows();
+        sh.close();
+        toast(`Deleted “${fl.name}”`);
+        return;
+      }
+      const b = e.target.closest('[data-fi]');
+      if (!b) return;
+      const fl = all[+b.dataset.fi];
+      let a = r, z = r;
+      if ($('#fwhole', sh.el).checked) { while (isBarRow(a - 1)) a--; while (isBarRow(z + 1)) z++; }
+      for (let i = a; i <= z; i++) {
+        const text = barView(rows[i].cells).text;
+        if (text) rows[i].cells = SH.applyFlow(text, fl.steps);
+      }
+      sh.close();
+      commit();
+      toast(`“${fl.name}” applied`, { label: 'Undo', fn: undo });
+    });
+  }
+  async function saveFlow(r) {
+    const steps = SH.flowOf(rows[r].cells);
+    const name = await ask({ title: 'Name this flow', value: `Flow ${S.flows.length + 1}`, ok: 'Save' });
+    if (!name) return;
+    S.flows.unshift({ id: FP.uid(), name, steps, user: true });
+    keepFlows();
+    toast('Flow saved — apply it from any bar’s ⋯ menu');
+  }
+
+  // ---------------- stats and the syllable target ----------------
+  VA.stats = () => {
+    // sections by their labels (bars before the first label are the top of the song)
+    const parts = [];
+    rows.forEach((row) => {
+      if (row.type === 'label') parts.push({ name: row.text, lines: [] });
+      else if (row.type === 'bar') {
+        if (!parts.length) parts.push({ name: 'Top', lines: [] });
+        const t = barView(row.cells).text;
+        if (t) parts[parts.length - 1].lines.push(t);
+      }
+    });
+    const lines = parts.flatMap((p) => p.lines);
+    const all = syl.stats(lines);
+    const pct = (x) => `${Math.round(x * 100)}%`;
+    const avg = (st) => (st.lines ? Math.round(st.syllables / st.lines) : 0);
+    const sh = sheet({
+      title: 'Song stats',
+      html: `<div class="set-row"><div><div class="lbl">Syllables per bar</div><div class="sub">Bars more than 1 off the target get marked</div></div>
+          <span class="nudge"><button type="button" class="btn" data-a="tdn" aria-label="Lower target">−</button><b id="tgv">${f.target || 'Off'}</b><button type="button" class="btn" data-a="tup" aria-label="Raise target">+</button><button type="button" class="btn" data-a="toff">Off</button></span></div>
+        <div class="tiles">
+          <div><b>${all.lines}</b><span>bars written</span></div>
+          <div><b>${avg(all)}</b><span>syllables / bar</span></div>
+          <div><b>${pct(all.density)}</b><span>words that rhyme</span></div>
+          <div><b>${all.multis}</b><span>multi-syllable rhymes</span></div>
+        </div>
+        ${all.top.length ? `<div class="sec-h">Top rhyme sounds</div>${all.top.map((fam) => `<p class="fam">${fam.slice(0, 8).map(esc).join(' · ')}</p>`).join('')}` : ''}
+        ${parts.length > 1 ? `<div class="sec-h">Sections</div><table class="st-t"><tr><th></th><th>bars</th><th>syl / bar</th><th>rhyme</th></tr>${parts.filter((p) => p.lines.length).map((p) => { const st = syl.stats(p.lines); return `<tr><td>${esc(p.name)}</td><td>${st.lines}</td><td>${avg(st)}</td><td>${pct(st.density)}</td></tr>`; }).join('')}</table>` : ''}
+        <p class="src">Words that rhyme: share a rhyme sound with a different word nearby. Multis: runs of 2–3 syllables whose vowels repeat across lines.</p>`,
+      actions: {
+        tdn: () => setTarget((f.target || avg(all) || 12) - 1),
+        tup: () => setTarget((f.target || avg(all) || 12) + 1),
+        toff: () => setTarget(null),
+      },
+    });
+    function setTarget(v) {
+      f.target = v == null ? null : clamp(v, 4, 32);
+      saveSoon('files', f);
+      $('#tgv', sh.el).textContent = f.target || 'Off';
+      paintAll();
+    }
   };
 
   let lastW = 0;

@@ -122,5 +122,19 @@
     rows[tr].cells[tk] = text;
   }
 
-  FP.sheet = { newBarRow, isBarRow, sylPieces, stepText, spreadCells, wordSteps, barAfter, nextPos, pushAt, pullAt, placeWords, moveStep };
+  /**
+   * Lay a line onto a flow — the steps a rhythm hits (e.g. [0, 3, 6, 8, 11, 14]): one syllable
+   * per step in order, extra syllables sharing the last step, unused steps left as rests.
+   */
+  function applyFlow(text, steps) {
+    const hits = [...new Set(steps)].filter((k) => k >= 0 && k < 16).sort((a, b) => a - b);
+    const cells = Array.from({ length: 16 }, () => []);
+    if (!hits.length) return cells.map(stepText);
+    sylPieces(text).forEach((s, i) => cells[hits[Math.min(i, hits.length - 1)]].push(s));
+    return cells.map(stepText);
+  }
+  /** The steps a bar's rhythm hits. */
+  const flowOf = (cells) => cells.map((c, k) => (c.trim() ? k : -1)).filter((k) => k >= 0);
+
+  FP.sheet = { newBarRow, isBarRow, sylPieces, stepText, spreadCells, wordSteps, barAfter, nextPos, pushAt, pullAt, placeWords, moveStep, applyFlow, flowOf };
 })();

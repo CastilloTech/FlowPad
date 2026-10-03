@@ -53,6 +53,7 @@ const S = {
   projects: [], folders: [], files: [], patterns: [],
   settings: { id: 'settings', theme: 'dark', online: true, bpm: 90, timeSig: '4/4', accent: true, recBeat: true, recWords: true, recClick: false, beatClick: false },
   cur: null, caret: {}, cell: {}, panel: null, stripMode: 'rhymes', assoc: {}, lex: null,
+  flows: [], // saved bar rhythms (kv 'flows')
 };
 
 const view = $('#view'), topbar = $('#topbar'), dock = $('#dock');

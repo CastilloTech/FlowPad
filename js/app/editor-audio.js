@@ -44,7 +44,7 @@ function editorAudio(ed) {
     const named = fl.name.match(/(\d{2,3})\s*bpm/i); // most beat files say their tempo
     const guess = named ? +named[1] : audio.guessBpm(buf);
     const b = { id: FP.uid(), name: fl.name.replace(/\.[^.]+$/, '') || 'My beat', blob: fl, mime: fl.type, bpm: clamp(Math.round(guess || f.bpm), 50, 220), offset: 0, bars: 4, duration: buf.duration, created: Date.now() };
-    if (!(await beatSettings(b, true))) return;
+    if (!(await beatSettings(b, true, buf))) return;
     if (b.bars >= 8) b.sections = findSections(b, buf);
     await db.put('beats', b);
     tracks.set(b.id, { rec: b, buf });
@@ -152,8 +152,11 @@ function editorAudio(ed) {
     if (!S.files.some((x) => x !== f && x.track && x.track.id === id)) { await db.del('beats', id); tracks.delete(id); }
   }
 
-  /** Tempo, where bar 1 starts, and loop length — resolves true when saved. */
-  function beatSettings(b, isNew) {
+  /**
+   * Tempo, where bar 1 starts, and loop length — resolves true when saved. With the decoded
+   * beat, "Line it up" plays it from bar 1 with a click on every beat to nudge the start by ear.
+   */
+  function beatSettings(b, isNew, buf) {
     return new Promise((resolve) => {
       let taps = [], barsTouched = !isNew;
       const autoBars = () => Math.max(1, Math.round(((b.duration - b.offset) * b.bpm) / 240));
@@ -163,9 +166,19 @@ function editorAudio(ed) {
         html: `<form class="beatform">
           <label class="set-row"><div><div class="lbl">Tempo</div><div class="sub">${isNew ? 'Guessed — check it, or tap along' : 'The beat’s own BPM'}</div></div><span class="mrow"><input class="field num" name="bpm" type="number" inputmode="decimal" min="50" max="220" step="1" value="${b.bpm}"><button type="button" class="btn" data-a="btap">Tap</button></span></label>
           <label class="set-row"><div><div class="lbl">Bar 1 starts at</div><div class="sub">Seconds into the file — skip an intro or silence</div></div><input class="field num" name="offset" type="number" inputmode="decimal" min="0" step="0.01" value="${b.offset}"></label>
+          ${buf ? `<div class="set-row lineup"><div><div class="lbl">Line it up</div><div class="sub">Plays bar 1 on with a click on each beat — nudge until the click sits on the kick</div></div>
+            <span class="nudge"><button type="button" class="btn" data-a="bprev" aria-label="Play from bar 1 with clicks">${icon('play', 'sm')}</button><button type="button" class="btn" data-a="bn" data-d="-0.05">−50</button><button type="button" class="btn" data-a="bn" data-d="-0.01">−10</button><button type="button" class="btn" data-a="bn" data-d="0.01">+10</button><button type="button" class="btn" data-a="bn" data-d="0.05">+50</button></span></div>` : ''}
           <label class="set-row"><div><div class="lbl">Loop length</div><div class="sub">Bars before it starts over (whole file = ${autoBars()})</div></div><input class="field num" name="bars" type="number" inputmode="numeric" min="1" max="256" step="1" value="${b.bars}"></label>
           <div class="sheet-actions"><button type="button" class="btn" data-close>Cancel</button><button class="btn primary">${isNew ? 'Use this beat' : 'Save'}</button></div></form>`,
         actions: {
+          // play from bar 1 with clicks on top; nudging while it plays restarts it from the new spot
+          bprev: () => { sync0(); if (stopPrev) { stopPrev(); stopPrev = null; return; } preview(); },
+          bn: (el) => {
+            const v = Math.max(0, Math.min(b.duration - 0.5, Math.round(((+form.elements.offset.value || 0) + +el.dataset.d) * 1000) / 1000));
+            form.elements.offset.value = v;
+            sync0();
+            if (stopPrev) preview();
+          },
           btap: () => {
             const now = performance.now();
             if (taps.length && now - taps[taps.length - 1] > 2000) taps = [];
@@ -176,7 +189,13 @@ function editorAudio(ed) {
         },
       });
       const form = sh.el.querySelector('form');
-      let done = false;
+      let done = false, stopPrev = null, prevT = 0;
+      const preview = () => {
+        if (stopPrev) stopPrev();
+        clearTimeout(prevT);
+        stopPrev = audio.previewBeat({ buffer: buf, offset: b.offset, bpm: b.bpm, bars: 2 });
+        prevT = setTimeout(() => { stopPrev = null; }, ((2 * 240) / b.bpm) * 1000 + 200);
+      };
       const sync0 = () => {
         b.bpm = clamp(+form.elements.bpm.value || b.bpm, 50, 220);
         b.offset = Math.max(0, Math.min(b.duration - 0.5, +form.elements.offset.value || 0));
@@ -193,7 +212,7 @@ function editorAudio(ed) {
         sh.close();
         resolve(true);
       });
-      sh.onclose = () => { if (!done) resolve(false); };
+      sh.onclose = () => { if (stopPrev) stopPrev(); clearTimeout(prevT); if (!done) resolve(false); };
     });
   }
   VA.tmenu = () => {
@@ -204,7 +223,7 @@ function editorAudio(ed) {
       items: [
         { label: 'Tempo, start and loop', icon: 'metro', onClick: async () => {
           const b = { ...tk.rec };
-          if (!(await beatSettings(b, false))) return;
+          if (!(await beatSettings(b, false, tk.buf))) return;
           const moved = b.bpm !== tk.rec.bpm || b.offset !== tk.rec.offset || b.bars !== tk.rec.bars;
           Object.assign(tk.rec, b);
           if (moved && tk.rec.sections) tk.rec.sections = tk.rec.bars >= 8 ? findSections(tk.rec, tk.buf) : null; // bar lines moved: find the sections again
@@ -508,6 +527,45 @@ function editorAudio(ed) {
     if (playingId === t.id) { stopPlayer(); return; }
     playTake(t, el);
   };
+  /**
+   * The take mixed with the beat it was recorded over (the song's patterns, or its imported beat),
+   * lined up the way it was heard, rendered offline and saved as a WAV to download or share.
+   */
+  async function exportMix(t) {
+    toast('Mixing your take with the beat…');
+    try {
+      let voice = bufs.get(t.id);
+      if (!voice) { voice = await audio.decode(t.blob); bufs.set(t.id, voice); }
+      const seq = barLines(f), tk = trackReady(), tm = t.timing;
+      const mix = await audio.renderMix({
+        voice,
+        steps: tm.log,
+        getBar: tk && !f.track.drums ? null : (b) => barSteps(f, seq.length ? seq[b % seq.length] : -1),
+        track: tk ? { buffer: tk.buf, offset: tk.rec.offset, bars: tk.rec.bars, rate: tm.bpm / tk.rec.bpm } : null,
+        lag: (tm.lat || 0) + 0.02,
+        songBpm: tm.bpm,
+      });
+      const blob = audio.encodeWav(mix);
+      const name = `${f.title} - ${t.name} (with beat).wav`;
+      const file = window.File && new File([blob], name, { type: 'audio/wav' });
+      const canShare = navigator.canShare && file && navigator.canShare({ files: [file] });
+      const mb = (blob.size / 1048576).toFixed(1);
+      // a fresh tap to share or save — the mixing took long enough that the browser wants one
+      const sh = sheet({
+        title: 'Your mix is ready',
+        html: `<p class="msg">${esc(name)} · ${fmtDur(mix.duration)} · ${mb} MB</p>
+          <div class="sheet-actions">${canShare ? '<button class="btn" data-a="mshare">Share</button>' : ''}<button class="btn primary" data-a="msave">Download</button></div>`,
+        actions: {
+          mshare: () => { sh.close(); navigator.share({ files: [file], title: name }).catch(() => {}); },
+          msave: () => { sh.close(); download(name, blob); },
+        },
+      });
+    } catch (e) {
+      console.error(e);
+      toast('Couldn’t mix this take in this browser');
+    }
+  }
+
   VA.tmore = (el) => {
     const t = takes.find((x) => x.id === el.dataset.id);
     if (!t) return;
@@ -517,6 +575,7 @@ function editorAudio(ed) {
       ...(t.heard && t.heard.length ? [{ label: 'Write its words into the steps', icon: 'pen', hint: 'Again, into empty or new bars', onClick: async () => { toast('Writing the words into the steps…'); await writeTake(t); } }] : []),
       { label: 'Rename', icon: 'edit', onClick: async () => { const v = await ask({ title: 'Rename take', value: t.name }); if (v) { t.name = v; await db.put('recordings', t); loadTakes(); } } },
       { label: 'Download', icon: 'download', onClick: () => download(name, t.blob) },
+      ...(t.timing && t.timing.drums && t.timing.log.length ? [{ label: 'Export with the beat', icon: 'upload', hint: 'One audio file to send', onClick: () => exportMix(t) }] : []),
     ];
     const shareFile = window.File && new File([t.blob], name, { type: t.mime });
     if (navigator.canShare && shareFile && navigator.canShare({ files: [shareFile] })) {
