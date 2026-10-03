@@ -634,8 +634,9 @@ function editorAudio(ed) {
   function clearNow() {
     ed.nowStep = -1;
     setNowLine(-1);
-    if (ed.nowCell) ed.nowCell.classList.remove('now');
+    if (ed.nowCell) ed.nowCell.classList.remove('now', 'hit');
     ed.nowCell = null;
+    $$('.blk.pa, .blk.pb').forEach((x) => x.classList.remove('pa', 'pb'));
     $$('#seq .st.ph').forEach((x) => x.classList.remove('ph'));
     $$('#struct .sseg.on').forEach((x) => x.classList.remove('on'));
     $$('#mb i').forEach((x) => x.classList.remove('on'));
@@ -646,8 +647,13 @@ function editorAudio(ed) {
     ed.nowStep = k;
     const blk = blkEl(line);
     const cell = blk && blk.querySelectorAll('.cell')[k];
-    if (ed.nowCell && ed.nowCell !== cell) ed.nowCell.classList.remove('now');
-    if (cell) cell.classList.add('now');
+    if (ed.nowCell && ed.nowCell !== cell) ed.nowCell.classList.remove('now', 'hit');
+    if (cell && cell !== ed.nowCell) {
+      cell.classList.add('now');
+      // the sheet moves with the music: each syllable pops as it's heard, the bar pulses on the beats
+      if (cell.lastChild.textContent) cell.classList.add('hit');
+      if (rows[line] && k % (rows[line].cells.length / 4) === 0) { const a = blk.classList.contains('pa'); blk.classList.toggle('pa', !a); blk.classList.toggle('pb', a); }
+    }
     ed.nowCell = cell;
   }
   function onTick(b, k) {

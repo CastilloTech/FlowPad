@@ -594,7 +594,7 @@ export default [
       assert.ok(r.noSwitchesInPanel);
       assert.deepEqual(r.options.slice(0, 2), ['Start the beat when I record', 'Count in']);
       assert.deepEqual(r.songMenu, ['Rename', 'Move to…', 'Duplicate', 'Versions…', 'Share & export…', 'Delete song']);
-      assert.deepEqual(r.sections, ['General', 'Sound & timing', 'Your data', 'About']);
+      assert.deepEqual(r.sections, ['General', 'Writing', 'Sound & timing', 'Your data', 'About']);
     },
   },
 
@@ -622,6 +622,7 @@ export default [
       // pocket check
       document.querySelector('[data-a="pocket"]').click(); await sleep(300);
       out.pocket = [...document.querySelectorAll('.bh .pk')].map((x) => x.textContent);
+      out.offp = document.querySelectorAll('.cell.offp').length;
       // the same cadence over the whole verse: repeat badges, and the stats say where to switch up
       await rhythm(0);
       document.querySelector('#fwhole').checked = true;
@@ -637,7 +638,9 @@ export default [
       assert.ok(r.library.includes('Triplet') && r.library.includes('Boom bap bounce'), `${r.library}`);
       assert.equal(r.bar2.cells, 12);
       assert.ok(r.bar2.filled >= 10, 'a 13-syllable bar on 12 triplets fills them');
-      assert.ok(r.pocket.length >= 6 && r.pocket.every((x) => /^\d+\/\d+$/.test(x)), `${r.pocket}`);
+      // only bars with stresses off the pocket say so, and those stresses are marked
+      assert.ok(r.pocket.length >= 3 && r.pocket.every((x) => /^(\d+)\/(\d+)$/.test(x) && +x.split('/')[0] < +x.split('/')[1]), `${r.pocket}`);
+      assert.ok(r.offp >= r.pocket.length);
       assert.deepEqual(r.repeats, ['≡3', '≡4']);
       assert.match(r.variety, /Bars 1–4 share one cadence/);
     },
@@ -679,7 +682,10 @@ export default [
       out.movedOn = document.querySelector('.cell.act')?.dataset.r === String(+B().querySelector('.cell').dataset.r + 1);
       // hear the bar: its own playback, the playhead on it
       B().querySelector('[data-a="bar-menu"]').click(); await sleep(300);
-      menu(/Hear this bar/).click(); await sleep(1200);
+      menu(/Hear this bar/).click();
+      // the bar pulses on the beats (it may be redrawn in between, so watch for a while)
+      out.pulse = false;
+      for (let i = 0; i < 12; i++) { await sleep(100); out.pulse = out.pulse || B().classList.contains('pa') || B().classList.contains('pb'); }
       out.playing = FP.audio.state();
       out.playheadOnBar = !!B().querySelector('.cell.now');
       return out;
@@ -691,6 +697,64 @@ export default [
       assert.ok(r.movedOn, 'a filled guide moves on to the next bar');
       assert.deepEqual(r.playing, { playing: true, kind: 'bar' });
       assert.ok(r.playheadOnBar);
+      assert.ok(r.pulse);
+    },
+  },
+
+  {
+    name: 'feel: a coach mark, the header chip explains itself, the typing bar, an empty song, themes and step size',
+    async run() {
+      const { sleep, bars, menu, type } = E2E;
+      const out = {};
+      document.querySelector('.row').click(); await sleep(1400);
+      out.coach = document.querySelector('.coach')?.textContent;
+      // pocket check on: bars with stresses off the pocket get one chip, and it explains itself
+      document.querySelector('[data-a="pocket"]').click(); await sleep(300);
+      const bx = document.querySelector('.bh .bx');
+      out.chip = bx && { text: bx.textContent, warn: bx.classList.contains('warn') };
+      bx.click(); await sleep(300);
+      out.info = [...document.querySelectorAll('.sheet .bi-t')].map((x) => x.textContent);
+      out.infoBtn = document.querySelector('.sheet .bi .btn')?.textContent;
+      document.querySelector('.sheet [data-close]').click(); await sleep(300);
+      // the typing bar: the line you're writing, the step you're on marked
+      bars()[0].querySelectorAll('.cell')[2].click(); await sleep(200);
+      out.docked = document.querySelector('#cin').classList.contains('docked') && !document.querySelector('#typebar').hidden;
+      out.on = document.querySelector('#tbl .tp.on')?.textContent;
+      await type('neon '); await sleep(100);
+      out.line = document.querySelector('#tbl .tps').textContent;
+      // a new song says how to start, until there's a word in it
+      location.hash = '#/'; await sleep(400);
+      document.querySelector('.fab').click(); await sleep(300);
+      menu(/New song/).click(); await sleep(700);
+      out.emptyCard = !document.querySelector('#wsempty').hidden;
+      await type('hello '); await sleep(100);
+      out.emptyGone = document.querySelector('#wsempty').hidden;
+      // accent, high contrast and step size from Settings
+      location.hash = '#/'; await sleep(400);
+      document.querySelector('[data-a="settings"]').click(); await sleep(300);
+      document.querySelector('#acc [data-c="teal"]').click();
+      document.querySelector('#hc').click();
+      [...document.querySelectorAll('#zm button')].find((b) => b.textContent === 'L').click();
+      const d = document.documentElement;
+      out.theme = { accent: d.dataset.accent, contrast: d.dataset.contrast, color: getComputedStyle(d).getPropertyValue('--accent').trim() };
+      document.querySelector('.sheet [data-close]').click(); await sleep(300);
+      document.querySelector('.row').click(); await sleep(600);
+      out.cellH = Math.round(document.querySelector('#lines .cell').getBoundingClientRect().height);
+      return out;
+    },
+    check(r, assert) {
+      assert.match(r.coach || '', /Tap a step/);
+      assert.ok(r.chip && /^\d+\/\d+$/.test(r.chip.text) && r.chip.warn, JSON.stringify(r.chip));
+      assert.equal(r.info.length, 1);
+      assert.match(r.info[0], /of \d+ in the pocket/);
+      assert.equal(r.infoBtn, 'Hear this bar');
+      assert.ok(r.docked);
+      assert.ok(r.on);
+      assert.match(r.line, /NEON|neon/);
+      assert.ok(r.emptyCard);
+      assert.ok(r.emptyGone);
+      assert.deepEqual(r.theme, { accent: 'teal', contrast: 'high', color: '#2fd4c0' });
+      assert.equal(r.cellH, Math.round(38 * 1.3));
     },
   },
 
@@ -698,6 +762,7 @@ export default [
     name: 'speed: typing in a 70-bar song; the step box stays on its step while scrolling',
     async run() {
       const { sleep } = E2E;
+      S.settings.typeBar = false; // the step box floating on its step (phones type in the typing bar)
       document.querySelector('.row').click(); await sleep(500);
       const inp = () => document.querySelector('#cin');
       const type = (v) => { const t0 = performance.now(); inp().value = v; inp().dispatchEvent(new Event('input', { bubbles: true })); return performance.now() - t0; };

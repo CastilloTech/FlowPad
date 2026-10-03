@@ -38,6 +38,17 @@
   }
 
   /** The drum kit, playing into `dest` on audio context `c` (live, or offline for an export). */
+  /** The notes FlowPad's own sounds use: A minor pentatonic, so clicks, blips and UI sounds sit together. */
+  const KEY = { E4: 329.63, A4: 440, A5: 880, C6: 1046.5, D6: 1174.66, E6: 1318.51, G6: 1567.98, A6: 1760 };
+  /** UI sounds: the notes of each, as [note, delay s]. */
+  const UI = {
+    land: [['A6', 0]],
+    slot: [['E6', 0], ['A6', 0.06]],
+    bar: [['A5', 0], ['C6', 0.07], ['E6', 0.14]],
+    save: [['D6', 0], ['G6', 0.08]],
+    undo: [['E6', 0], ['C6', 0.06]],
+    remove: [['A4', 0], ['E4', 0.07]],
+  };
   function makeVoices(c, dest, noiseBuf) {
     function noiseSrc(t, dur) {
       const s = c.createBufferSource();
@@ -97,18 +108,20 @@
         n.connect(filter('highpass', 6500)).connect(g).connect(dest);
       },
       /** A soft tick for a word landing on a step. */
-      tick(t) {
+      tick(t) { this.note(t, KEY.A6, 0.05, 0.035); },
+      /** One soft sine note of the UI's sounds (all in one key, so they never clash with each other). */
+      note(t, freq, peak = 0.06, decay = 0.09) {
         const o = c.createOscillator(), g = c.createGain();
-        o.frequency.value = 2200;
-        env(g.gain, t, 0.05, 0.001, 0.03);
+        o.frequency.value = freq;
+        env(g.gain, t, peak, 0.002, decay);
         o.connect(g).connect(dest);
-        o.start(t); o.stop(t + 0.05);
+        o.start(t); o.stop(t + decay + 0.05);
       },
       /** A word's syllable, heard as a short blip: higher and louder when stressed. */
       blip(t, strong) {
         const o = c.createOscillator(), g = c.createGain();
         o.type = 'triangle';
-        o.frequency.value = strong ? 1250 : 880;
+        o.frequency.value = strong ? KEY.E6 : KEY.A5;
         env(g.gain, t, strong ? 0.32 : 0.16, 0.002, 0.06);
         o.connect(g).connect(dest);
         o.start(t); o.stop(t + 0.09);
@@ -116,7 +129,7 @@
       click(t, accent) {
         const o = c.createOscillator(), g = c.createGain();
         o.type = 'square';
-        o.frequency.value = accent ? 1760 : 1180;
+        o.frequency.value = accent ? KEY.A6 : KEY.D6;
         env(g.gain, t, accent ? 0.35 : 0.2, 0.001, 0.04);
         o.connect(filter('lowpass', 5000)).connect(g).connect(dest);
         o.start(t); o.stop(t + 0.06);
@@ -390,6 +403,12 @@
     state,
     hit(track) { ensure(); voices[track](ctx.currentTime + 0.01); },
     tick() { ensure(); voices.tick(ctx.currentTime + 0.005); },
+    /** A UI sound by name: land, slot, bar, save, undo, remove. */
+    ui(name) {
+      ensure();
+      const t = ctx.currentTime + 0.005;
+      (UI[name] || UI.land).forEach(([n, d], i, all) => voices.note(t + d, KEY[n], i === all.length - 1 ? 0.06 : 0.045, n.endsWith('4') ? 0.14 : 0.1));
+    },
     update(patch) { if (tr.cfg) Object.assign(tr.cfg, patch); if (patch.bpm) tr.bpm = patch.bpm; },
     /** When each step of the last transport run sounded (kept after stop), plus its tempo. */
     timeline: () => ({ log: tr.log.slice(), bpm: tr.bpm }),

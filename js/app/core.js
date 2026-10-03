@@ -28,8 +28,9 @@ function ago(t) {
   return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
-const empty = (ic, title, text) =>
-  `<div class="empty">${icon(ic)}<h3>${esc(title)}</h3><p>${esc(text)}</p></div>`;
+/** An empty screen that says what to do — and, given buttons ([label, action, primary?]), lets you do it. */
+const empty = (ic, title, text, acts = []) =>
+  `<div class="empty">${icon(ic)}<h3>${esc(title)}</h3><p>${esc(text)}</p>${acts.length ? `<div class="empty-act">${acts.map(([l, a, pri]) => `<button class="btn${pri ? ' primary' : ''}" data-a="${a}">${esc(l)}</button>`).join('')}</div>` : ''}</div>`;
 
 // ---------- constants ----------
 const TRACKS = [
@@ -174,18 +175,63 @@ function textToSheet(text, bars = {}) {
 
 // ---------- theme ----------
 const mq = matchMedia('(prefers-color-scheme: light)');
+const ACCENTS = [['blue', 'Blue'], ['violet', 'Violet'], ['teal', 'Teal'], ['pink', 'Pink'], ['amber', 'Amber']];
 function applyTheme() {
   const t = S.settings.theme === 'system' ? (mq.matches ? 'light' : 'dark') : S.settings.theme;
-  document.documentElement.dataset.theme = t;
-  $('meta[name="theme-color"]').content = t === 'light' ? '#f5f8fd' : '#05070b';
+  const d = document.documentElement.dataset;
+  d.theme = t;
+  d.accent = S.settings.accentColor || 'blue';
+  if (S.settings.contrast) d.contrast = 'high'; else delete d.contrast;
+  $('meta[name="theme-color"]').content = t === 'light' ? (S.settings.contrast ? '#ffffff' : '#f5f8fd') : (S.settings.contrast ? '#000000' : '#05070b');
 }
 if (mq.addEventListener) mq.addEventListener('change', applyTheme);
 
 // ---------- feel: motion, haptics ----------
 /** The phone asks for less motion: skip the glides and slides. */
 const calm = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
-/** A tiny tap on phones that can vibrate (Android — iPhones don't let websites vibrate). */
+/** A tiny tap on phones that can vibrate (Android — iPhones don't let websites vibrate). A list is a pattern: [buzz, pause, buzz…]. */
 const buzz = (ms = 8) => { try { if (navigator.vibrate && S.settings.haptics !== false) navigator.vibrate(ms); } catch (e) { /* not allowed */ } };
+/** Tablets and landscape phones: panels sit beside the sheet, and sheets slide in from the side. */
+const wide = () => matchMedia('(min-width: 1024px), (orientation: landscape) and (min-width: 760px) and (max-height: 560px)').matches;
+
+// ---------- coach marks: a tip once, next to the thing it's about, when it's relevant ----------
+let coachLast = 0;
+/** Show tip `id` by `anchor` unless it's been seen (or another just showed). Any touch or a few seconds closes it. */
+function coach(id, anchor, text) {
+  const seen = (S.settings.coached = S.settings.coached || {});
+  if (seen[id] || !anchor || !anchor.isConnected || $('.coach') || openSheets.length || Date.now() - coachLast < 15000) return false;
+  const r = anchor.getBoundingClientRect();
+  if (r.bottom < 0 || r.top > innerHeight || !r.width) return false;
+  seen[id] = Date.now();
+  coachLast = Date.now();
+  saveSettings();
+  const el = document.createElement('div');
+  el.className = 'coach';
+  el.setAttribute('role', 'status');
+  el.innerHTML = `<span>${text}</span>`;
+  document.body.appendChild(el);
+  // below the anchor if there's room above the dock, otherwise above it; the arrow points at its middle
+  const w = el.offsetWidth, h = el.offsetHeight;
+  const bottom = (dock.hidden ? innerHeight : dock.getBoundingClientRect().top) - 8;
+  const below = r.bottom + 12 + h < bottom;
+  const x = clamp(r.left + r.width / 2 - w / 2, 10, innerWidth - w - 10);
+  el.style.left = `${x}px`;
+  el.style.top = `${below ? r.bottom + 10 : r.top - h - 10}px`;
+  el.style.setProperty('--ax', `${clamp(r.left + r.width / 2 - x, 14, w - 14)}px`);
+  el.dataset.side = below ? 'below' : 'above';
+  requestAnimationFrame(() => el.classList.add('show'));
+  let t = 0;
+  const close = () => {
+    clearTimeout(t);
+    document.removeEventListener('pointerdown', close, true);
+    window.removeEventListener('scroll', close);
+    el.classList.remove('show');
+    setTimeout(() => el.remove(), 200);
+  };
+  setTimeout(() => { document.addEventListener('pointerdown', close, true); window.addEventListener('scroll', close, { passive: true }); }, 300);
+  t = setTimeout(close, 7000);
+  return true;
+}
 
 // ---------- toast (optionally with one action, e.g. Undo) ----------
 let toastT = 0;
@@ -227,7 +273,9 @@ function swipeDown(el, { onClose, canStart = () => true, base = '' }) {
       el.style.transition = 'none';
     }
     e.preventDefault();
-    dy = Math.max(0, d - 10);
+    // follows the finger down; past a long pull it gets heavier, like a rubber band
+    const pull = d - 10;
+    dy = pull < 260 ? Math.max(0, pull) : 260 + (pull - 260) * 0.4;
     el.style.transform = `${base} translateY(${dy}px)`;
   }, { passive: false });
   const end = () => {
@@ -244,6 +292,7 @@ function swipeDown(el, { onClose, canStart = () => true, base = '' }) {
 // ---------- sheets ----------
 const openSheets = [];
 function sheet({ title, html = '', items, cls = '', actions = {} }) {
+  $$('.coach').forEach((c) => c.remove()); // a tip doesn't outlive what it pointed at
   const wrap = document.createElement('div');
   wrap.className = 'sheet-wrap';
   const body = items
@@ -280,7 +329,7 @@ function sheet({ title, html = '', items, cls = '', actions = {} }) {
   // swipe down from the handle or the title, or anywhere once the content is scrolled to the top
   swipeDown(api.el, {
     base: 'translateX(-50%)',
-    canStart: (e) => !!e.target.closest('.grab, .sheet-h') || api.el.scrollTop <= 0,
+    canStart: (e) => !wide() && (!!e.target.closest('.grab, .sheet-h') || api.el.scrollTop <= 0), // side sheets close by their ✕ or the scrim
     onClose: () => { api.el.style.transform = ''; api.close(); },
   });
   openSheets.push(api);
@@ -381,6 +430,9 @@ function route(keepScroll) {
   dock.hidden = true;
   dock.innerHTML = '';
   const [k, id] = location.hash.replace(/^#\/?/, '').split('/');
+  document.body.classList.toggle('ed', k === 'e');
+  document.body.classList.remove('pan');
+  $$('.coach').forEach((c) => c.remove());
   if (k === 'p') Project(id);
   else if (k === 'f') Folder(id);
   else if (k === 'e') Editor(id);

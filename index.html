@@ -68,7 +68,10 @@
 
   <div id="app">
     <header class="topbar" id="topbar"></header>
-    <main id="view" tabindex="-1"></main>
+    <main id="view" tabindex="-1">
+      <!-- shown until the library has loaded -->
+      <div class="page skel" aria-label="Loading"><div class="sk sk-search"></div><div class="sk sk-h"></div><div class="sk sk-row"></div><div class="sk sk-row"></div><div class="sk sk-row"></div><div class="sk sk-h"></div><div class="sk sk-row"></div><div class="sk sk-row"></div></div>
+    </main>
   </div>
   <div class="dock" id="dock" hidden></div>
   <div id="sheets"></div>

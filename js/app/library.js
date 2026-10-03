@@ -25,7 +25,7 @@ function Home() {
     <div id="home-main">
       ${recent.length ? `<div class="sec-h">Recent</div><ul class="list">${recent.map((f) => fileRow(f, { path: true })).join('')}</ul>` : ''}
       <div class="sec-h">Projects <span class="count">${projects.length || ''}</span></div>
-      ${projects.length ? `<ul class="list">${projects.map(projRow).join('')}</ul>` : empty('project', 'No projects yet', 'Tap + to start your first project.')}
+      ${projects.length ? `<ul class="list">${projects.map(projRow).join('')}</ul>` : empty('project', 'Nothing here yet', 'Start a song right away, or a project to keep an album together.', [['New song', 'qsong', true], ['New project', 'qproj']])}
     </div>
   </div>
   <button class="fab" data-a="add" aria-label="New">${icon('plus')}</button>`;
@@ -42,6 +42,8 @@ function Home() {
       : empty('search', 'No matches', 'Try another word or phrase.');
   });
 
+  VA.qsong = quickFile;
+  VA.qproj = newProject;
   VA.backup = () => { exportBackup(); rerender(); };
   VA.snooze = () => { S.settings.backupSnooze = Date.now() + 3 * 864e5; saveSettings(); rerender(); };
   VA.install = async () => { await installNow(); rerender(); };
@@ -70,9 +72,11 @@ function Project(id) {
   view.innerHTML = `<div class="page no-tabs">
     ${fos.length ? `<div class="sec-h">Folders <span class="count">${fos.length}</span></div><ul class="list">${fos.map(folderRow).join('')}</ul>` : ''}
     ${fis.length ? `<div class="sec-h">Songs <span class="count">${fis.length}</span></div><ul class="list">${fis.map((f) => fileRow(f)).join('')}</ul>` : ''}
-    ${!fos.length && !fis.length ? empty('project', 'Empty project', 'Add folders for verses, hooks or tracks — or start a song.') : ''}
+    ${!fos.length && !fis.length ? empty('project', 'Empty project', 'Start a song, or add folders for verses, hooks or tracks.', [['New song', 'pnew', true], ['New folder', 'pfold']]) : ''}
   </div>
   <button class="fab" data-a="add" aria-label="Add">${icon('plus')}</button>`;
+  VA.pnew = () => newFile(p.id);
+  VA.pfold = () => newFolder(p.id);
   VA.add = () => sheet({
     title: `Add to ${p.name}`,
     items: [
@@ -93,10 +97,11 @@ function Folder(id) {
   });
   const fis = filesIn(fo.projectId, fo.id);
   view.innerHTML = `<div class="page no-tabs">
-    ${fis.length ? `<div class="sec-h">Songs <span class="count">${fis.length}</span></div><ul class="list">${fis.map((f) => fileRow(f)).join('')}</ul>` : empty('folder', 'Empty folder', 'Tap + to start a song.')}
+    ${fis.length ? `<div class="sec-h">Songs <span class="count">${fis.length}</span></div><ul class="list">${fis.map((f) => fileRow(f)).join('')}</ul>` : empty('folder', 'Empty folder', 'Songs you start here stay together.', [['New song', 'fnew', true]])}
   </div>
   <button class="fab" data-a="add" aria-label="New song">${icon('plus')}</button>`;
   VA.add = () => newFile(fo.projectId, fo.id);
+  VA.fnew = VA.add;
 }
 
 
@@ -182,11 +187,17 @@ function openSettings() {
     title: 'Settings',
     html: `<div class="set-sec">General</div>
       <div class="set-row"><div class="lbl">Theme</div><div class="seg" id="thm">${['dark', 'light', 'system'].map((t) => `<button data-t="${t}" class="${S.settings.theme === t ? 'on' : ''}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</div></div>
+      <div class="set-row"><div class="lbl">Accent</div><div class="swatches" id="acc">${ACCENTS.map(([k, l]) => `<button data-c="${k}" class="sw ${(S.settings.accentColor || 'blue') === k ? 'on' : ''}" aria-label="${l}" title="${l}"></button>`).join('')}</div></div>
+      <label class="set-row"><div><div class="lbl">High contrast</div><div class="sub">Brighter text and clearer edges, for writing in sunlight</div></div><input type="checkbox" class="switch" id="hc" ${S.settings.contrast ? 'checked' : ''}></label>
       <label class="set-row"><div><div class="lbl">Online dictionary</div><div class="sub">Exact syllables, stresses and rhymes. Off keeps everything on this device.</div></div><input type="checkbox" class="switch" id="onl" ${S.settings.online ? 'checked' : ''}></label>
+      <div class="set-sec">Writing</div>
+      <div class="set-row"><div><div class="lbl">Typing</div><div class="sub">On the step, or in a bar above the keyboard</div></div><div class="seg" id="tbar">${[['auto', 'Auto'], ['step', 'Step'], ['bar', 'Bar']].map(([k, l]) => `<button data-v="${k}" class="${(S.settings.typeBar == null ? 'auto' : S.settings.typeBar ? 'bar' : 'step') === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+      <div class="set-row"><div><div class="lbl">Step size</div><div class="sub">Or pinch the grid</div></div><div class="seg" id="zm">${[[0.85, 'S'], [1, 'M'], [1.3, 'L']].map(([z, l]) => `<button data-z="${z}" class="${Math.abs((S.settings.zoom || 1) - z) < 0.01 ? 'on' : ''}" aria-label="Step size ${l}">${l}</button>`).join('')}</div></div>
+      <button class="menu-i" id="retips">${icon('sparkle')}<span>Show tips again</span><small>Each shows once, when it’s useful</small></button>
       <div class="set-sec">Sound &amp; timing</div>
       <button class="menu-i" id="cal">${icon('metro')}<span>Headphone delay</span><small id="calv">${S.settings.latencyMs != null ? `${S.settings.latencyMs} ms · measured` : 'Automatic · measure it'}</small></button>
-      <label class="set-row"><div><div class="lbl">Soft sounds</div><div class="sub">A quiet tick when a word lands on a step</div></div><input type="checkbox" class="switch" id="snd" ${S.settings.sounds ? 'checked' : ''}></label>
-      ${navigator.vibrate ? `<label class="set-row"><div><div class="lbl">Vibration</div><div class="sub">Tiny taps when you pick up and drop steps</div></div><input type="checkbox" class="switch" id="hap" ${S.settings.haptics !== false ? 'checked' : ''}></label>` : ''}
+      <label class="set-row"><div><div class="lbl">Soft sounds</div><div class="sub">Quiet notes as words land, bars finish, and you save or undo</div></div><input type="checkbox" class="switch" id="snd" ${S.settings.sounds ? 'checked' : ''}></label>
+      ${navigator.vibrate ? `<label class="set-row"><div><div class="lbl">Vibration</div><div class="sub">Tiny taps as words land (firmer on the beat) and steps move</div></div><input type="checkbox" class="switch" id="hap" ${S.settings.haptics !== false ? 'checked' : ''}></label>` : ''}
       <div class="set-sec">Your data</div>
       <button class="menu-i" id="exp">${icon('download')}<span>Back up everything</span><small>${S.settings.lastBackup ? `Last: ${ago(S.settings.lastBackup)}` : 'Never backed up'}</small></button>
       <button class="menu-i" id="imp">${icon('upload')}<span>Restore a backup</span></button>
@@ -206,7 +217,26 @@ function openSettings() {
     applyTheme();
     $$('#thm button', el).forEach((x) => x.classList.toggle('on', x === b));
   });
-  $('#snd', el).addEventListener('change', (e) => { S.settings.sounds = e.target.checked; saveSettings(); if (e.target.checked) audio.tick(); });
+  $('#snd', el).addEventListener('change', (e) => { S.settings.sounds = e.target.checked; saveSettings(); if (e.target.checked) audio.ui('bar'); });
+  $('#acc', el).addEventListener('click', (e) => {
+    const b = e.target.closest('[data-c]');
+    if (!b) return;
+    S.settings.accentColor = b.dataset.c;
+    saveSettings();
+    applyTheme();
+    $$('#acc .sw', el).forEach((x) => x.classList.toggle('on', x === b));
+  });
+  $('#hc', el).addEventListener('change', (e) => { S.settings.contrast = e.target.checked; saveSettings(); applyTheme(); });
+  const seg = (id, fn) => $(id, el).addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    fn(b);
+    saveSettings();
+    $$(`${id} button`, el).forEach((x) => x.classList.toggle('on', x === b));
+  });
+  seg('#tbar', (b) => { S.settings.typeBar = { auto: undefined, step: false, bar: true }[b.dataset.v]; if (S.cur) toast('Takes effect when you next open a song'); });
+  seg('#zm', (b) => { S.settings.zoom = +b.dataset.z; const g = $('#gsheet'); if (g) g.style.setProperty('--cz', S.settings.zoom); });
+  $('#retips', el).addEventListener('click', () => { S.settings.coached = {}; saveSettings(); toast('Tips will show again as you write'); });
   const hap = $('#hap', el);
   if (hap) hap.addEventListener('change', (e) => { S.settings.haptics = e.target.checked; saveSettings(); buzz(10); });
   $('#onl', el).addEventListener('change', (e) => { S.settings.online = e.target.checked; syl.online = e.target.checked; saveSettings(); });
