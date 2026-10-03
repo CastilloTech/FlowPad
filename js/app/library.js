@@ -49,8 +49,8 @@ function Home() {
   VA.add = () => sheet({
     title: 'Create',
     items: [
+      { label: 'New song', icon: 'file', hint: 'Start writing now', onClick: quickFile },
       { label: 'New project', icon: 'project', hint: 'Album, mixtape, EP', onClick: newProject },
-      { label: 'Quick file', icon: 'file', hint: 'Goes to Scratchpad', onClick: quickFile },
     ],
   });
 }
@@ -69,14 +69,14 @@ function Project(id) {
   const fos = foldersIn(id), fis = filesIn(id, null);
   view.innerHTML = `<div class="page no-tabs">
     ${fos.length ? `<div class="sec-h">Folders <span class="count">${fos.length}</span></div><ul class="list">${fos.map(folderRow).join('')}</ul>` : ''}
-    ${fis.length ? `<div class="sec-h">Files <span class="count">${fis.length}</span></div><ul class="list">${fis.map((f) => fileRow(f)).join('')}</ul>` : ''}
-    ${!fos.length && !fis.length ? empty('project', 'Empty project', 'Add folders for verses, hooks or tracks — or start writing a file.') : ''}
+    ${fis.length ? `<div class="sec-h">Songs <span class="count">${fis.length}</span></div><ul class="list">${fis.map((f) => fileRow(f)).join('')}</ul>` : ''}
+    ${!fos.length && !fis.length ? empty('project', 'Empty project', 'Add folders for verses, hooks or tracks — or start a song.') : ''}
   </div>
   <button class="fab" data-a="add" aria-label="Add">${icon('plus')}</button>`;
   VA.add = () => sheet({
     title: `Add to ${p.name}`,
     items: [
-      { label: 'New file', icon: 'file', onClick: () => newFile(p.id) },
+      { label: 'New song', icon: 'file', onClick: () => newFile(p.id) },
       { label: 'New folder', icon: 'folder', onClick: () => newFolder(p.id) },
     ],
   });
@@ -93,9 +93,9 @@ function Folder(id) {
   });
   const fis = filesIn(fo.projectId, fo.id);
   view.innerHTML = `<div class="page no-tabs">
-    ${fis.length ? `<div class="sec-h">Files <span class="count">${fis.length}</span></div><ul class="list">${fis.map((f) => fileRow(f)).join('')}</ul>` : empty('folder', 'Empty folder', 'Tap + to start a new file.')}
+    ${fis.length ? `<div class="sec-h">Songs <span class="count">${fis.length}</span></div><ul class="list">${fis.map((f) => fileRow(f)).join('')}</ul>` : empty('folder', 'Empty folder', 'Tap + to start a song.')}
   </div>
-  <button class="fab" data-a="add" aria-label="New file">${icon('plus')}</button>`;
+  <button class="fab" data-a="add" aria-label="New song">${icon('plus')}</button>`;
   VA.add = () => newFile(fo.projectId, fo.id);
 }
 
@@ -180,15 +180,19 @@ function calibrate(done) {
 function openSettings() {
   const sh = sheet({
     title: 'Settings',
-    html: `<div class="set-row"><div class="lbl">Theme</div><div class="seg" id="thm">${['dark', 'light', 'system'].map((t) => `<button data-t="${t}" class="${S.settings.theme === t ? 'on' : ''}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</div></div>
-      <label class="set-row"><div><div class="lbl">Online dictionary</div><div class="sub">Exact syllables, stresses, rhymes and associations from Datamuse. Off keeps everything on-device.</div></div><input type="checkbox" class="switch" id="onl" ${S.settings.online ? 'checked' : ''}></label>
+    html: `<div class="set-sec">General</div>
+      <div class="set-row"><div class="lbl">Theme</div><div class="seg" id="thm">${['dark', 'light', 'system'].map((t) => `<button data-t="${t}" class="${S.settings.theme === t ? 'on' : ''}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</div></div>
+      <label class="set-row"><div><div class="lbl">Online dictionary</div><div class="sub">Exact syllables, stresses and rhymes. Off keeps everything on this device.</div></div><input type="checkbox" class="switch" id="onl" ${S.settings.online ? 'checked' : ''}></label>
+      <div class="set-sec">Sound &amp; timing</div>
+      <button class="menu-i" id="cal">${icon('metro')}<span>Headphone delay</span><small id="calv">${S.settings.latencyMs != null ? `${S.settings.latencyMs} ms · measured` : 'Automatic · measure it'}</small></button>
       <label class="set-row"><div><div class="lbl">Soft sounds</div><div class="sub">A quiet tick when a word lands on a step</div></div><input type="checkbox" class="switch" id="snd" ${S.settings.sounds ? 'checked' : ''}></label>
       ${navigator.vibrate ? `<label class="set-row"><div><div class="lbl">Vibration</div><div class="sub">Tiny taps when you pick up and drop steps</div></div><input type="checkbox" class="switch" id="hap" ${S.settings.haptics !== false ? 'checked' : ''}></label>` : ''}
-      <button class="menu-i" id="cal">${icon('metro')}<span>Headphone delay</span><small id="calv">${S.settings.latencyMs != null ? `${S.settings.latencyMs} ms · measured` : 'Automatic · measure it'}</small></button>
-      <button class="menu-i" id="exp">${icon('download')}<span>Export backup</span><small>${S.settings.lastBackup ? `Last: ${ago(S.settings.lastBackup)}` : 'Never backed up'}</small></button>
-      <button class="menu-i" id="imp">${icon('upload')}<span>Import backup</span></button>
+      <div class="set-sec">Your data</div>
+      <button class="menu-i" id="exp">${icon('download')}<span>Back up everything</span><small>${S.settings.lastBackup ? `Last: ${ago(S.settings.lastBackup)}` : 'Never backed up'}</small></button>
+      <button class="menu-i" id="imp">${icon('upload')}<span>Restore a backup</span></button>
       <input type="file" id="impf" accept="application/json,.json" hidden>
-      <p class="src">Everything stays on this device${persisted ? ', protected from automatic clearing' : ' — the browser may clear it if space runs low, so back up regularly'}. Backups hold lyrics, folders and drum patterns; takes and imported beats stay on the device. · ${syl.lexiconSize()} words in the pronunciation cache</p>
+      <p class="src">Your songs live on this device${persisted ? ' and are protected from automatic clearing' : ' — the browser can clear them if space runs low, so back up now and then'}. A backup holds your songs, folders and drum patterns.</p>
+      <div class="set-sec">About</div>
       <a class="menu-i" href="privacy.html" target="_blank" rel="noopener">${icon('file')}<span>Privacy</span><small>What stays on your device</small></a>
       <a class="menu-i" href="https://github.com/CastilloTech/FlowPad/issues/new" target="_blank" rel="noopener">${icon('pen')}<span>Send feedback</span><small>GitHub</small></a>`,
   });
@@ -215,10 +219,10 @@ function openSettings() {
       const data = JSON.parse(await fl.text());
       if (data.app !== 'FlowPad') throw new Error('not a FlowPad backup');
       const n = (data.files || []).length;
-      if (!(await confirmBox({ title: 'Import backup?', message: `${plural(n, 'file')} will be merged into your library. Items with the same ID are replaced.`, ok: 'Import' }))) return;
+      if (!(await confirmBox({ title: 'Restore this backup?', message: `${plural(n, 'song')} will be added to your library. Songs that are already here are updated to the backup.`, ok: 'Restore' }))) return;
       for (const s of ['projects', 'folders', 'files', 'patterns']) for (const o of data[s] || []) await db.put(s, o);
       await load();
-      toast('Backup imported');
+      toast('Backup restored');
       closeAllSheets();
       go('#/');
     } catch (err) {

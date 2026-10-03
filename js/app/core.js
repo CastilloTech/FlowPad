@@ -421,12 +421,12 @@ function fileRow(f, { path = false, q = '' } = {}) {
 }
 function folderRow(fo) {
   const n = S.files.filter((f) => f.folderId === fo.id).length;
-  return `<li class="row" data-go="#/f/${fo.id}"><span class="row-ic">${icon('folder')}</span><div class="row-main"><div class="row-t">${esc(fo.name)}</div><div class="row-s">${plural(n, 'file')}</div></div><button class="icon-btn" data-a="more-folder" data-id="${fo.id}" aria-label="Options for ${esc(fo.name)}">${icon('more')}</button></li>`;
+  return `<li class="row" data-go="#/f/${fo.id}"><span class="row-ic">${icon('folder')}</span><div class="row-main"><div class="row-t">${esc(fo.name)}</div><div class="row-s">${plural(n, 'song')}</div></div><button class="icon-btn" data-a="more-folder" data-id="${fo.id}" aria-label="Options for ${esc(fo.name)}">${icon('more')}</button></li>`;
 }
 function projRow(p) {
   const nf = S.files.filter((f) => f.projectId === p.id).length;
   const nd = S.folders.filter((f) => f.projectId === p.id).length;
-  return `<li class="row" data-go="#/p/${p.id}"><span class="row-ic">${icon('project')}</span><div class="row-main"><div class="row-t">${esc(p.name)}</div><div class="row-s">${nd ? plural(nd, 'folder') + ' · ' : ''}${plural(nf, 'file')} · ${ago(projTime(p))}</div></div><button class="icon-btn" data-a="more-project" data-id="${p.id}" aria-label="Options for ${esc(p.name)}">${icon('more')}</button></li>`;
+  return `<li class="row" data-go="#/p/${p.id}"><span class="row-ic">${icon('project')}</span><div class="row-main"><div class="row-t">${esc(p.name)}</div><div class="row-s">${nd ? plural(nd, 'folder') + ' · ' : ''}${plural(nf, 'song')} · ${ago(projTime(p))}</div></div><button class="icon-btn" data-a="more-project" data-id="${p.id}" aria-label="Options for ${esc(p.name)}">${icon('more')}</button></li>`;
 }
 
 // ---------- create / delete ----------
@@ -467,6 +467,8 @@ async function deleteFile(f) {
   await db.del('files', f.id);
   const recs = await db.byIndex('recordings', 'fileId', f.id);
   await Promise.all(recs.map((r) => db.del('recordings', r.id)));
+  const vers = await db.byIndex('versions', 'fileId', f.id);
+  await Promise.all(vers.map((v) => db.del('versions', v.id)));
 }
 async function deleteFolder(fo) {
   for (const f of S.files.filter((x) => x.folderId === fo.id)) await deleteFile(f);
@@ -487,12 +489,12 @@ function projectMenu(p) {
     items: [
       { label: 'Rename', icon: 'edit', onClick: async () => { const v = await ask({ title: 'Rename project', value: p.name }); if (v) { p.name = v; await saveNow('projects', p); rerender(); } } },
       { label: 'New folder', icon: 'folder', onClick: () => newFolder(p.id) },
-      { label: 'New file', icon: 'file', onClick: () => newFile(p.id) },
+      { label: 'New song', icon: 'file', onClick: () => newFile(p.id) },
       {
         label: 'Delete project', icon: 'trash', danger: true,
         onClick: async () => {
           const n = S.files.filter((f) => f.projectId === p.id).length;
-          if (await confirmBox({ title: 'Delete project?', message: `“${p.name}” and ${plural(n, 'file')} inside it will be permanently deleted, including recordings.`, ok: 'Delete', danger: true })) {
+          if (await confirmBox({ title: 'Delete project?', message: `“${p.name}” and ${plural(n, 'song')} inside it will be permanently deleted, including recordings.`, ok: 'Delete', danger: true })) {
             await deleteProject(p);
             toast('Project deleted');
             go('#/');
@@ -507,12 +509,12 @@ function folderMenu(fo) {
     title: fo.name,
     items: [
       { label: 'Rename', icon: 'edit', onClick: async () => { const v = await ask({ title: 'Rename folder', value: fo.name }); if (v) { fo.name = v; await saveNow('folders', fo); rerender(); } } },
-      { label: 'New file here', icon: 'file', onClick: () => newFile(fo.projectId, fo.id) },
+      { label: 'New song here', icon: 'file', onClick: () => newFile(fo.projectId, fo.id) },
       {
         label: 'Delete folder', icon: 'trash', danger: true,
         onClick: async () => {
           const n = S.files.filter((f) => f.folderId === fo.id).length;
-          if (await confirmBox({ title: 'Delete folder?', message: `“${fo.name}”${n ? ` and ${plural(n, 'file')} inside it` : ''} will be permanently deleted.`, ok: 'Delete', danger: true })) {
+          if (await confirmBox({ title: 'Delete folder?', message: `“${fo.name}”${n ? ` and ${plural(n, 'song')} inside it` : ''} will be permanently deleted.`, ok: 'Delete', danger: true })) {
             const pid = fo.projectId;
             await deleteFolder(fo);
             toast('Folder deleted');
@@ -536,21 +538,31 @@ function fileMenu(f, inEditor) {
         toast('Duplicated');
         if (!inEditor) rerender();
       } },
-      { label: 'Copy lyrics', icon: 'copy', onClick: async () => { try { await navigator.clipboard.writeText(f.text); toast('Lyrics copied'); } catch (e) { toast('Clipboard unavailable'); } } },
-      ...(navigator.share ? [{ label: 'Share lyrics', icon: 'share', onClick: () => navigator.share({ title: f.title, text: `${f.title}\n\n${f.text}` }).catch(() => {}) }] : []),
-      { label: 'Export as .txt', icon: 'download', onClick: () => download(`${f.title}.txt`, new Blob([`${f.title}\n\n${f.text}\n`], { type: 'text/plain' })) },
-      { label: 'Print or save as PDF', icon: 'file', hint: 'A clean lyric sheet', onClick: () => printLyrics(f) },
+      { label: 'Versions…', icon: 'loop', hint: 'Look back, restore', onClick: () => versionsSheet(f) },
+      { label: 'Share & export…', icon: 'share', hint: 'Copy, PDF, .txt', onClick: () => shareMenu(f) },
       {
-        label: 'Delete file', icon: 'trash', danger: true,
+        label: 'Delete song', icon: 'trash', danger: true,
         onClick: async () => {
-          if (await confirmBox({ title: 'Delete file?', message: `“${f.title}” and its recordings will be permanently deleted.`, ok: 'Delete', danger: true })) {
+          if (await confirmBox({ title: 'Delete song?', message: `“${f.title}” and its recordings will be permanently deleted.`, ok: 'Delete', danger: true })) {
             const back = f.folderId ? `#/f/${f.folderId}` : `#/p/${f.projectId}`;
             await deleteFile(f);
-            toast('File deleted');
+            toast('Song deleted');
             if (inEditor) go(back, true); else rerender();
           }
         },
       },
+    ],
+  });
+}
+/** Every way out for a song's lyrics, in one place. */
+function shareMenu(f) {
+  sheet({
+    title: 'Share & export',
+    items: [
+      ...(navigator.share ? [{ label: 'Share lyrics', icon: 'share', onClick: () => navigator.share({ title: f.title, text: `${f.title}\n\n${f.text}` }).catch(() => {}) }] : []),
+      { label: 'Copy lyrics', icon: 'file', onClick: async () => { try { await navigator.clipboard.writeText(f.text); toast('Lyrics copied'); } catch (e) { toast('Clipboard unavailable'); } } },
+      { label: 'Print or save as PDF', icon: 'download', hint: 'A clean lyric sheet', onClick: () => printLyrics(f) },
+      { label: 'Download as text', icon: 'download', hint: '.txt', onClick: () => download(`${f.title}.txt`, new Blob([`${f.title}\n\n${f.text}\n`], { type: 'text/plain' })) },
     ],
   });
 }

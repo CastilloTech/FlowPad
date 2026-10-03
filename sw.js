@@ -1,8 +1,8 @@
 /* FlowPad service worker — offline app shell. Bump VERSION when files change. */
-const VERSION = 'flowpad-v12';
+const VERSION = 'flowpad-v13';
 const SHELL = [
   './', 'index.html', 'privacy.html', 'css/styles.css', 'js/db.js', 'js/syllables.js', 'js/words.js', 'js/sheet.js', 'js/structure.js', 'js/audio.js', 'js/voice.js',
-  'js/app/core.js', 'js/app/library.js', 'js/app/editor.js', 'js/app/editor-audio.js', 'js/app/metronome.js', 'js/app/boot.js',
+  'js/app/core.js', 'js/app/library.js', 'js/app/versions.js', 'js/app/editor.js', 'js/app/editor-audio.js', 'js/app/metronome.js', 'js/app/boot.js',
   'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
 ];
 

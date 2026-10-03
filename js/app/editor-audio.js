@@ -67,6 +67,7 @@ function editorAudio(ed) {
   }
   /** Put a label at each of the beat's sections; bar k of the sheet then plays over bar k of the beat. */
   function layOut(secs) {
+    snapshot(f, 'Before laying out to the beat');
     rows.splice(0, rows.length, ...FP.structure.layout(rows, secs));
     ed.cur = null;
     commit();
@@ -293,17 +294,30 @@ function editorAudio(ed) {
   let recOn = false, autoDrums = false, takes = [], playingId = null, hearing = false, counting = false;
   const wantWords = () => S.settings.recWords !== false && voice.supported();
 
+  /** Takes first; how recording behaves lives behind the options button. */
   function PTakes() {
-    panel.innerHTML = `<div class="ph"><span class="ph-t">Takes</span><span class="count" id="tc"></span><span class="grow"></span><button class="chip sm ${S.settings.recBeat ? 'on' : ''}" data-a="ropt">${icon('drum', 'sm')}Beat on rec</button>${closeBtn}</div>
-      <label class="set-row"><div><div class="lbl">Count in</div><div class="sub">One bar of clicks before the beat starts</div></div><input type="checkbox" class="switch" id="rcount" ${S.settings.countIn !== false ? 'checked' : ''}></label>
-      ${voice.supported() ? `<label class="set-row"><div><div class="lbl">Write my words into the steps</div><div class="sub">Your words land on the steps you rap them on. Uses the browser’s speech recognition, which may send audio to Google, Microsoft or Apple. <a href="privacy.html" target="_blank" rel="noopener">Privacy</a></div></div><input type="checkbox" class="switch" id="rwords" ${wantWords() ? 'checked' : ''}></label>` : ''}
+    panel.innerHTML = `<div class="ph"><span class="ph-t">Takes</span><span class="count" id="tc"></span><span class="grow"></span><button class="icon-btn muted" data-a="ropts" aria-label="Recording options">${icon('gear')}</button>${closeBtn}</div>
       <ul class="list" id="takes"></ul>
-      <p class="hint">${rec.supported() ? 'Hit Rec in the dock — the beat starts with you and follows the patterns placed on your bars. Headphones keep the beat out of your vocal (and out of the word timing).' : 'Recording needs microphone access, which browsers only allow over HTTPS or on localhost.'}${rec.supported() && !voice.supported() ? ' This browser can’t turn speech into words — try Chrome, Edge or Safari for that.' : ''}</p>`;
-    const rw = $('#rwords');
-    if (rw) rw.addEventListener('change', () => { S.settings.recWords = rw.checked; saveSettings(); });
-    $('#rcount').addEventListener('change', (e) => { S.settings.countIn = e.target.checked; saveSettings(); });
+      ${rec.supported() ? '' : '<p class="hint">Recording needs microphone access, which browsers only allow over HTTPS or on localhost.</p>'}`;
     loadTakes();
   }
+  /** Recording options: the beat, the count-in, words into steps, and the headphone delay. */
+  VA.ropts = () => {
+    const sh = sheet({
+      title: 'Recording options',
+      html: `<label class="set-row"><div><div class="lbl">Start the beat when I record</div><div class="sub">It follows the patterns or beat on your bars</div></div><input type="checkbox" class="switch" id="rbeat" ${S.settings.recBeat ? 'checked' : ''}></label>
+        <label class="set-row"><div><div class="lbl">Count in</div><div class="sub">One bar of clicks before the beat starts</div></div><input type="checkbox" class="switch" id="rcount" ${S.settings.countIn !== false ? 'checked' : ''}></label>
+        ${voice.supported() ? `<label class="set-row"><div><div class="lbl">Write my words into the steps</div><div class="sub">Your words land on the steps you rap them on. Uses the browser’s speech recognition, which may send audio to Google, Microsoft or Apple. <a href="privacy.html" target="_blank" rel="noopener">Privacy</a></div></div><input type="checkbox" class="switch" id="rwords" ${wantWords() ? 'checked' : ''}></label>`
+          : '<p class="src">This browser can’t turn speech into words — Chrome, Edge or Safari can.</p>'}
+        <button class="menu-i" data-a="rcal">${icon('metro')}<span>Headphone delay</span><small>${S.settings.latencyMs != null ? `${S.settings.latencyMs} ms · measured` : 'Measure it'}</small></button>
+        <p class="src">Headphones keep the beat out of your vocal, and out of the word timing.</p>`,
+      actions: { rcal: () => { sh.close(); calibrate(); } },
+    });
+    $('#rbeat', sh.el).addEventListener('change', (e) => { S.settings.recBeat = e.target.checked; saveSettings(); });
+    $('#rcount', sh.el).addEventListener('change', (e) => { S.settings.countIn = e.target.checked; saveSettings(); });
+    const rw = $('#rwords', sh.el);
+    if (rw) rw.addEventListener('change', () => { S.settings.recWords = rw.checked; saveSettings(); });
+  };
   async function loadTakes() {
     takes = (await db.byIndex('recordings', 'fileId', f.id)).sort((a, b) => b.created - a.created);
     const ul = $('#takes');
@@ -311,9 +325,8 @@ function editorAudio(ed) {
     $('#tc').textContent = takes.length || '';
     ul.innerHTML = takes.length
       ? takes.map((t) => `<li class="take" data-id="${t.id}"><button class="play" data-a="tplay" data-id="${t.id}" aria-label="Play ${esc(t.name)}">${icon(playingId === t.id ? 'pause' : 'play')}</button><div class="row-main"><div class="row-t">${esc(t.name)}</div><div class="take-bar"><div></div></div><div class="row-s">${fmtDur(t.duration)} · ${ago(t.created)}</div></div><button class="icon-btn muted" data-a="tmore" data-id="${t.id}" aria-label="Options for ${esc(t.name)}">${icon('more')}</button></li>`).join('')
-      : '<li class="muted sm" style="padding:10px 0">No takes yet.</li>';
+      : `<li class="takes-empty">${icon('mic')}<div><b>No takes yet</b><span>Press <b>Rec</b> below — the beat starts with you, and your words can land on the steps.</span></div></li>`;
   }
-  VA.ropt = (el) => { S.settings.recBeat = !S.settings.recBeat; el.classList.toggle('on', S.settings.recBeat); saveSettings(); };
 
   function setRecUI(on) {
     const b = $('#drec');
@@ -415,6 +428,7 @@ function editorAudio(ed) {
       placed.push({ q, pc });
     }));
 
+    snapshot(f, 'Before words from a take');
     // recorded bars → sheet rows
     const seq = barLines(f);
     const isEmpty = (ri) => rows[ri].cells.every((c) => !c.trim());

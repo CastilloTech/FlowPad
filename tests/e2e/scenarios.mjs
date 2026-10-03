@@ -41,6 +41,7 @@ export default [
       // print sheet
       window.print = () => { window.__printed = true; };
       document.querySelector('[data-a="fmenu"]').click(); await sleep(300);
+      menu(/Share & export/).click(); await sleep(350);
       menu(/Print/).click(); await sleep(200);
       out.print = { called: !!window.__printed, title: document.querySelector('#print h1')?.textContent, bold: document.querySelector('#print p b')?.textContent };
       return out;
@@ -470,7 +471,8 @@ export default [
       out.marks = [...document.querySelectorAll('.bh .cnt')].map((c) => c.textContent.replace(/\s+/g, ' ').trim());
       // apply "On the beat" to bar 1: its 8 syllables go on steps 1, 5, 9, 13 (the rest share 13)
       bars()[0].querySelector('[data-a="bar-menu"]').click(); await sleep(300);
-      E2E.menu(/Apply a flow/).click(); await sleep(300);
+      out.barMenu = [...document.querySelectorAll('.menu-i span')].map((x) => x.textContent);
+      E2E.menu(/Rhythm/).click(); await sleep(300);
       [...document.querySelectorAll('.flow-i .menu-i')].find((b) => /On the beat/.test(b.textContent)).click(); await sleep(300);
       out.applied = steps(bars()[0]);
       out.toast = document.querySelector('#toast').textContent;
@@ -478,10 +480,11 @@ export default [
       out.undone = steps(bars()[0]);
       // save bar 2's rhythm and find it in the list
       bars()[1].querySelector('[data-a="bar-menu"]').click(); await sleep(300);
-      E2E.menu(/Save this flow/).click(); await sleep(300);
+      E2E.menu(/Rhythm/).click(); await sleep(300);
+      document.querySelector('.sheet [data-a="fsave"]').click(); await sleep(400);
       const f = document.querySelector('.sheet input'); f.value = 'My flow'; f.form.requestSubmit(); await sleep(300);
       bars()[0].querySelector('[data-a="bar-menu"]').click(); await sleep(300);
-      E2E.menu(/Apply a flow/).click(); await sleep(300);
+      E2E.menu(/Rhythm/).click(); await sleep(300);
       out.flows = [...document.querySelectorAll('.flow-i .menu-i > span:not(.fdots)')].map((s) => s.textContent);
       return out;
     },
@@ -493,8 +496,105 @@ export default [
       assert.equal(r.applied, 'Late · · · night, · · · pen · · · tight, city lights glow · · ·');
       assert.match(r.toast, /“On the beat” appliedUndo/);
       assert.ok(r.undone.startsWith('Late'), r.undone);
-      assert.equal(r.flows[0], 'My flow');
+      assert.deepEqual(r.barMenu, ['Rhythm…', 'Insert bar above', 'Insert bar below', 'Clear bar', 'Delete bar']);
+      assert.deepEqual(r.flows.slice(0, 3), ['Spread evenly', 'One syllable per step', 'My flow']);
       assert.ok(r.flows.includes('Straight 8ths'));
+    },
+  },
+
+  {
+    name: 'versions: saved on leaving and before big changes, named, restored, copied',
+    async run() {
+      const { sleep, bars, steps, cell, type, menu } = E2E;
+      const out = {};
+      const versions = () => new Promise((r) => { const q = indexedDB.open('flowpad'); q.onsuccess = () => { const g = q.result.transaction('versions').objectStore('versions').getAll(); g.onsuccess = () => r(g.result.sort((a, b) => b.created - a.created)); }; });
+      const open = async () => { location.hash = '#/'; await sleep(500); document.querySelector('.row').click(); await sleep(600); };
+      // an editing session leaves a version behind
+      await open();
+      const original = steps(bars()[0]);
+      cell(bars()[0], 1).click(); await sleep(80); await type('yo'); await sleep(200);
+      location.hash = '#/'; await sleep(600);
+      out.afterSession = (await versions()).map((v) => v.reason);
+      // name one
+      await open();
+      document.querySelector('[data-a="fmenu"]').click(); await sleep(300);
+      menu(/Versions/).click(); await sleep(400);
+      document.querySelector('.sheet [data-a="vsave"]').click(); await sleep(350);
+      const f = document.querySelector('.sheet input'); f.value = 'Draft 1'; f.form.requestSubmit(); await sleep(400);
+      const named = steps(bars()[0]);
+      // change it again, then restore the named one
+      cell(bars()[0], 3).click(); await sleep(80); await type('zz'); await sleep(200);
+      out.changed = steps(bars()[0]) !== named;
+      document.querySelector('[data-a="fmenu"]').click(); await sleep(300);
+      menu(/Versions/).click(); await sleep(400);
+      out.list = [...document.querySelectorAll('.vlist .row-t')].map((x) => x.textContent);
+      [...document.querySelectorAll('.vlist .row')].find((x) => /Draft 1/.test(x.textContent)).click(); await sleep(400);
+      out.preview = !!document.querySelector('.vtext p');
+      document.querySelector('.sheet [data-a="vrestore"]').click(); await sleep(900);
+      out.restored = steps(bars()[0]) === named;
+      out.afterRestore = (await versions()).map((v) => v.name || v.reason);
+      // copy a version as a new song
+      document.querySelector('[data-a="fmenu"]').click(); await sleep(300);
+      menu(/Versions/).click(); await sleep(400);
+      [...document.querySelectorAll('.vlist .row')].find((x) => /Draft 1/.test(x.textContent)).click(); await sleep(400);
+      document.querySelector('.sheet [data-a="vcopy"]').click(); await sleep(900);
+      out.copyTitle = document.querySelector('.tb-t')?.textContent;
+      // a flow over a whole section keeps a version first
+      bars()[0].querySelector('[data-a="bar-menu"]').click(); await sleep(300);
+      menu(/Rhythm/).click(); await sleep(300);
+      document.querySelector('#fwhole').checked = true;
+      [...document.querySelectorAll('.flow-i .menu-i')].find((b) => /Straight 8ths/.test(b.textContent)).click(); await sleep(500);
+      out.beforeFlow = (await versions()).some((v) => v.reason === 'Before a flow over a section');
+      out.original = original;
+      return out;
+    },
+    check(r, assert) {
+      assert.deepEqual(r.afterSession, ['Edited']);
+      assert.ok(r.changed);
+      assert.deepEqual(r.list, ['Draft 1', 'Edited'], 'newest first');
+      assert.ok(r.preview);
+      assert.ok(r.restored, 'restoring brings the named version back');
+      assert.ok(r.afterRestore.includes('Before restoring') && r.afterRestore.includes('Draft 1'), `${r.afterRestore}`);
+      assert.match(r.copyTitle, /^Late Night \(today /);
+      assert.ok(r.beforeFlow);
+    },
+  },
+
+  {
+    name: 'simple UI: New song first, beat chip opens the Beat panel, takes first with options behind ⚙',
+    async run() {
+      const { sleep, menu } = E2E;
+      const out = {};
+      document.querySelector('[data-a="add"]').click(); await sleep(300);
+      out.create = [...document.querySelectorAll('.sheet .menu-i span')].map((x) => x.textContent);
+      document.querySelector('.sheet [data-close]').click(); await sleep(300);
+      out.rowSub = [...document.querySelectorAll('.list .row-s')].map((x) => x.textContent).find((x) => /folder/.test(x));
+      document.querySelector('.row').click(); await sleep(600);
+      document.querySelector('[data-a="fdef"]').click(); await sleep(400);
+      out.beatPanel = document.querySelector('.dk-p.on')?.textContent.trim();
+      E2E.dock(/Takes/).click(); await sleep(400);
+      out.takesEmpty = document.querySelector('.takes-empty b')?.textContent;
+      out.noSwitchesInPanel = !document.querySelector('#panel .switch');
+      document.querySelector('[data-a="ropts"]').click(); await sleep(350);
+      out.options = [...document.querySelectorAll('.sheet .lbl')].map((x) => x.textContent);
+      document.querySelector('.sheet [data-close]').click(); await sleep(300);
+      document.querySelector('[data-a="fmenu"]').click(); await sleep(300);
+      out.songMenu = [...document.querySelectorAll('.sheet .menu-i span')].map((x) => x.textContent);
+      document.querySelector('.sheet [data-close]').click(); await sleep(300);
+      location.hash = '#/'; await sleep(500);
+      document.querySelector('[data-a="settings"]').click(); await sleep(300);
+      out.sections = [...document.querySelectorAll('.sheet .set-sec')].map((x) => x.textContent);
+      return out;
+    },
+    check(r, assert) {
+      assert.deepEqual(r.create, ['New song', 'New project']);
+      assert.match(r.rowSub || '', /1 song/);
+      assert.equal(r.beatPanel, 'Beat');
+      assert.equal(r.takesEmpty, 'No takes yet');
+      assert.ok(r.noSwitchesInPanel);
+      assert.deepEqual(r.options.slice(0, 2), ['Start the beat when I record', 'Count in']);
+      assert.deepEqual(r.songMenu, ['Rename', 'Move to…', 'Duplicate', 'Versions…', 'Share & export…', 'Delete song']);
+      assert.deepEqual(r.sections, ['General', 'Sound & timing', 'Your data', 'About']);
     },
   },
 

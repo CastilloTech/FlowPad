@@ -3,8 +3,8 @@
   'use strict';
   const FP = (window.FP = window.FP || {});
   const NAME = 'flowpad';
-  const VERSION = 2; // 2: beats (imported audio loops)
-  const STORES = ['projects', 'folders', 'files', 'patterns', 'recordings', 'kv', 'beats'];
+  const VERSION = 3; // 2: beats (imported audio loops) · 3: versions (song snapshots)
+  const STORES = ['projects', 'folders', 'files', 'patterns', 'recordings', 'kv', 'beats', 'versions'];
   let opening = null;
 
   function open() {
@@ -16,7 +16,7 @@
         for (const s of STORES) {
           if (!d.objectStoreNames.contains(s)) {
             const store = d.createObjectStore(s, { keyPath: 'id' });
-            if (s === 'recordings') store.createIndex('fileId', 'fileId');
+            if (s === 'recordings' || s === 'versions') store.createIndex('fileId', 'fileId');
           }
         }
       };

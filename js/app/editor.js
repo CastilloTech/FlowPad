@@ -83,7 +83,7 @@ function Editor(id) {
   const back = f.folderId && folder(f.folderId) ? `#/f/${f.folderId}` : `#/p/${f.projectId}`;
   setTop({
     back, title: f.title, sub: pathOf(f), onTitle: () => renameFile(f),
-    right: `<button class="metro-btn" data-a="metro" aria-label="Metronome and tempo"><span class="mdot"></span><span data-bpm>${f.bpm}</span></button><button class="icon-btn" data-a="fmenu" aria-label="File options">${icon('more')}</button>`,
+    right: `<button class="metro-btn" data-a="metro" aria-label="Metronome and tempo"><span class="mdot"></span><span data-bpm>${f.bpm}</span></button><button class="icon-btn" data-a="fmenu" aria-label="Song options">${icon('more')}</button>`,
   });
   VA.fmenu = () => fileMenu(f, true);
 
@@ -121,6 +121,7 @@ function Editor(id) {
   const box = $('#lines'), gs = $('#gsheet'), inp = $('#cin'), meas = $('#cmeasure'), panel = $('#panel'), stripEl = $('#strip');
   $('#tips').addEventListener('toggle', (e) => { S.settings.tipsClosed = !e.target.open; saveSettings(); });
   const rows = f.sheet;
+  const openedAs = versionKey(f); // to tell, on leaving, whether this session changed the song
   if (!rows.length) rows.push(newBarRow());
   let cur = S.cell[f.id] && rows[S.cell[f.id].r] && rows[S.cell[f.id].r].type === 'bar' ? { ...S.cell[f.id] } : null;
   let nowLine = -1, nowCell = null, nowStep = -1;
@@ -859,15 +860,10 @@ function Editor(id) {
   VA['bar-menu'] = (el) => {
     const r = +el.dataset.r;
     const row = rows[r];
-    const text = barView(row.cells).text;
-    const reflow = (mode) => { row.cells = spreadCells(text, mode); commit(); };
     sheet({
       title: `Bar ${el.dataset.n}`,
       items: [
-        { label: 'Spread syllables evenly', icon: 'flow', onClick: () => reflow('even') },
-        { label: 'One syllable per step', icon: 'drum', hint: 'Fast 16th-note flow', onClick: () => reflow('pack') },
-        { label: 'Apply a flow…', icon: 'loop', hint: 'Lay it out on a saved rhythm', onClick: () => flowSheet(r) },
-        ...(SH.flowOf(row.cells).length ? [{ label: 'Save this flow', icon: 'bank', hint: 'Keep its rhythm to reuse', onClick: () => saveFlow(r) }] : []),
+        { label: 'Rhythm…', icon: 'flow', hint: 'Spread, pack or a saved flow', onClick: () => rhythmSheet(r) },
         { label: 'Insert bar above', icon: 'plus', onClick: () => { if (cur && cur.r >= r) cur.r++; insertBar(r); activate(r, 0); } },
         { label: 'Insert bar below', icon: 'plus', onClick: () => { if (cur && cur.r > r) cur.r++; insertBar(r + 1); activate(r + 1, 0); } },
         { label: 'Clear bar', icon: 'x', onClick: () => { row.cells = newBarRow().cells; commit(); } },
@@ -895,12 +891,23 @@ function Editor(id) {
   const flowDots = (steps) => `<span class="fdots" aria-hidden="true">${range(16).map((k) => `<i class="${steps.includes(k) ? 'on' : ''}${k % 4 === 0 ? ' b' : ''}"></i>`).join('')}</span>`;
   const keepFlows = () => db.put('kv', { id: 'flows', list: S.flows });
 
-  function flowSheet(r) {
-    const all = [...S.flows, ...FLOWS];
+  /**
+   * How a bar's words sit on its steps, all in one sheet: spread evenly, one syllable per step,
+   * or a flow (built-in or saved) — for this bar or its whole section — and saving this bar's rhythm.
+   */
+  function rhythmSheet(r) {
+    const SPREAD = [
+      { name: 'Spread evenly', mode: 'even', note: 'Across the whole bar' },
+      { name: 'One syllable per step', mode: 'pack', note: 'Fast, from the first step' },
+    ];
+    const all = [...SPREAD, ...S.flows, ...FLOWS];
+    const has = SH.flowOf(rows[r].cells).length > 0;
     const sh = sheet({
-      title: 'Apply a flow',
+      title: 'Rhythm',
       html: `<label class="set-row"><div><div class="lbl">Whole section</div><div class="sub">Every bar until the next blank line or label</div></div><input type="checkbox" class="switch" id="fwhole"></label>
-        ${all.map((fl, i) => `<div class="flow-i"><button class="menu-i" data-fi="${i}">${flowDots(fl.steps)}<span>${esc(fl.name)}</span></button>${fl.user ? `<button class="icon-btn muted" data-fdel="${i}" aria-label="Delete ${esc(fl.name)}">${icon('x')}</button>` : ''}</div>`).join('')}`,
+        ${all.map((fl, i) => `<div class="flow-i"><button class="menu-i" data-fi="${i}">${fl.mode ? `${icon(fl.mode === 'even' ? 'flow' : 'drum')}<span>${esc(fl.name)}</span><small>${esc(fl.note)}</small>` : `${flowDots(fl.steps)}<span>${esc(fl.name)}</span>`}</button>${fl.user ? `<button class="icon-btn muted" data-fdel="${i}" aria-label="Delete ${esc(fl.name)}">${icon('x')}</button>` : ''}</div>`).join('')}
+        ${has ? `<button class="btn block fsave" data-a="fsave">${icon('bank', 'sm')}Save this bar’s rhythm</button>` : ''}`,
+      actions: { fsave: () => { sh.close(); saveFlow(r); } },
     });
     sh.el.addEventListener('click', (e) => {
       const del = e.target.closest('[data-fdel]');
@@ -917,9 +924,10 @@ function Editor(id) {
       const fl = all[+b.dataset.fi];
       let a = r, z = r;
       if ($('#fwhole', sh.el).checked) { while (isBarRow(a - 1)) a--; while (isBarRow(z + 1)) z++; }
+      if (z > a) snapshot(f, 'Before a flow over a section');
       for (let i = a; i <= z; i++) {
         const text = barView(rows[i].cells).text;
-        if (text) rows[i].cells = SH.applyFlow(text, fl.steps);
+        if (text) rows[i].cells = fl.mode ? spreadCells(text, fl.mode) : SH.applyFlow(text, fl.steps);
       }
       sh.close();
       commit();
@@ -932,7 +940,7 @@ function Editor(id) {
     if (!name) return;
     S.flows.unshift({ id: FP.uid(), name, steps, user: true });
     keepFlows();
-    toast('Flow saved — apply it from any bar’s ⋯ menu');
+    toast('Saved — find it under Rhythm in any bar’s ⋯ menu');
   }
 
   // ---------------- stats and the syllable target ----------------
@@ -1017,10 +1025,7 @@ function Editor(id) {
     $('#songbeat').textContent = patName(f.beat.def);
     if (S.panel === 'beat') PBeat();
   }
-  VA.fdef = () => sheet({
-    title: 'Song beat',
-    items: patternsSorted().map((p) => ({ label: p.name, icon: 'drum', on: p.id === f.beat.def, onClick: () => { f.beat.def = p.id; sync(); beatChanged(); } })),
-  });
+  VA.fdef = () => { if (S.panel !== 'beat') togglePanel('beat'); }; // one place for the beat: its panel
   VA['bar-pat'] = (el) => {
     const i = +el.dataset.r;
     const cur0 = rows[i].pat || null;
@@ -1243,6 +1248,7 @@ function Editor(id) {
   window.addEventListener('resize', onResize);
   onLeave(() => {
     ed.gone = true;
+    if (versionKey(f) !== openedAs) snapshot(f, 'Edited'); // the song as this session left it
     fitIO.disconnect();
     dragEnd(false);
     document.removeEventListener('keydown', onUndoKey);

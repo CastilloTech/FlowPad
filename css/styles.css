@@ -326,6 +326,29 @@ a.menu-i { color: var(--text); text-decoration: none; }
 .write-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 2px 0 10px; }
 .write-meta .stat { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; height: 40px; text-decoration: underline dotted color-mix(in srgb, var(--muted) 50%, transparent); text-underline-offset: 4px; }
 
+/* settings sections */
+.set-sec { margin: 22px 0 2px; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.set-sec:first-child { margin-top: 4px; }
+
+/* takes: an empty state that says what to do */
+.takes-empty { display: flex; align-items: center; gap: 14px; padding: 14px 4px; color: var(--muted); }
+.takes-empty > .i { width: 30px; height: 30px; color: var(--faint); flex: none; }
+.takes-empty b { color: var(--text); }
+.takes-empty > div > b { display: block; font-size: 15px; margin-bottom: 2px; }
+.takes-empty span { font-size: 14px; }
+
+/* versions */
+.vlist { margin-top: 8px; }
+.vlist .row { min-height: 60px; }
+.vnone { margin-top: 14px; }
+.vmeta { text-align: left; margin: 0 0 10px; }
+.vtext { max-height: 46dvh; overflow-y: auto; padding: 10px 14px; border-radius: 14px; background: var(--surface-2); }
+.vtext p { margin: 0; line-height: 1.55; }
+.vtext h3 { margin: 12px 0 2px; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.vtext h3:first-child { margin-top: 0; }
+.vtext .vgap { height: 8px; }
+.fsave { margin-top: 12px; }
+
 /* writing help: target markers, stats, flows */
 .bh .cnt.hi, .bh .cnt.lo { font-weight: 700; }
 .bh .cnt.hi { color: var(--r0); }
