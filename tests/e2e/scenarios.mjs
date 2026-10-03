@@ -303,6 +303,49 @@ export default [
   },
 
   {
+    name: 'rhymes: underlined across bars, selected word lights its rhymes, a tapped rhyme swaps in place',
+    async run() {
+      const { sleep, bars, steps, cell, type } = E2E;
+      document.querySelector('.row').click(); await sleep(500);
+      // a new section, so the sample song's words don't join in
+      document.querySelector('[data-a="add-sec"]').click(); await sleep(300);
+      const f = document.querySelector('.sheet input'); f.value = 'Verse 3'; f.form.requestSubmit(); await sleep(300);
+      await type('I take the money then I run every day');
+      document.querySelector('#cin').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); await sleep(150);
+      await type('watch it bake in the sun with the crew');
+      await sleep(400);
+      const n = bars().length, A = bars()[n - 2], B = bars()[n - 1];
+      const marked = (bar) => [...bar.querySelectorAll('.bline .w[data-r]')].map((w) => w.textContent.toLowerCase());
+      const out = { underA: marked(A), underB: marked(B) };
+      // select "take": its rhymes light up, in the other bar too
+      const k = [...A.querySelectorAll('.ct')].findIndex((c) => /^take$/i.test(c.textContent));
+      cell(A, k).click(); await sleep(300);
+      out.lit = [...document.querySelectorAll('.bline .w.rf')].map((w) => w.textContent.toLowerCase());
+      // tapping a rhyme swaps it in for "take"; the next bar is left alone
+      const beforeB = steps(B);
+      document.querySelector('#cin').blur();
+      // tap a rhyme the way the strip's chips do
+      const chip = document.createElement('button'); chip.dataset.a = 'ins'; chip.dataset.w = 'make'; document.querySelector('#strip').appendChild(chip); chip.click(); await sleep(300);
+      out.afterA = steps(bars()[n - 2]);
+      out.bUntouched = steps(bars()[n - 1]) === beforeB;
+      out.toast = document.querySelector('#toast').textContent;
+      E2E.toastAct().click(); await sleep(250);
+      out.undone = steps(bars()[n - 2]).startsWith('I take');
+      return out;
+    },
+    check(r, assert) {
+      assert.deepEqual(r.underA.filter((w) => ['take', 'run'].includes(w)).sort(), ['run', 'take']);
+      assert.deepEqual(r.underB.filter((w) => ['bake', 'sun'].includes(w)).sort(), ['bake', 'sun']);
+      assert.ok(r.lit.includes('take') && r.lit.includes('bake'), `lit: ${r.lit}`); // song-wide: the sample hook's take / make light up too
+      assert.ok(!r.lit.includes('money') && !r.lit.includes('run'), 'only rhymes of take');
+      assert.ok(r.afterA.startsWith('I make the'), r.afterA);
+      assert.ok(r.bUntouched, 'the next bar is left alone');
+      assert.equal(r.toast, 'Swapped “take” for “make”Undo');
+      assert.ok(r.undone);
+    },
+  },
+
+  {
     name: 'gestures: swipe a bar to delete / duplicate, swipe sheets and panels closed',
     async run() {
       const { sleep, bars, steps, swipe } = E2E;
@@ -347,7 +390,7 @@ export default [
   },
 
   {
-    name: 'speed: typing in a 70-bar song',
+    name: 'speed: typing in a 70-bar song; the step box stays on its step while scrolling',
     async run() {
       const { sleep } = E2E;
       document.querySelector('.row').click(); await sleep(500);
@@ -361,12 +404,21 @@ export default [
       b[b.length - 3].querySelectorAll('.cell')[3].click(); await sleep(50);
       const t = [];
       for (const v of ['m', 'mo', 'mon', 'mone', 'money']) { t.push(type(v)); await sleep(30); }
-      return { bars: b.length, keystrokeMs: Math.round(t.reduce((a, x) => a + x, 0) / t.length) };
+      // bars above only take their real height once drawn: scroll up through them and back —
+      // the step box must still sit on its step
+      const bar = () => { const all = E2E.bars(); return all[all.length - 3]; }; // looked up fresh: typing redraws the bar
+      const box = () => inp().getBoundingClientRect(), step = () => bar().querySelectorAll('.cell')[3].getBoundingClientRect();
+      for (let y = 0; y < 3; y++) { window.scrollTo(0, (document.body.scrollHeight * y) / 3); await sleep(120); }
+      window.scrollTo(0, 0); await sleep(200);
+      bar().scrollIntoView({ block: 'center' }); await sleep(300);
+      const drift = Math.round(Math.abs(box().top - step().top) + Math.abs(box().left - step().left));
+      return { bars: b.length, keystrokeMs: Math.round(t.reduce((a, x) => a + x, 0) / t.length), drift };
     },
     check(r, assert) {
       assert.ok(r.bars >= 70);
       // generous for slow CI machines; a full repaint used to take 70–90 ms on a fast desktop
       assert.ok(r.keystrokeMs < 60, `a keystroke took ${r.keystrokeMs} ms`);
+      assert.ok(r.drift <= 2, `the step box drifted ${r.drift}px off its step`);
     },
   },
 ];

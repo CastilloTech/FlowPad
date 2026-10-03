@@ -33,7 +33,7 @@ export async function launch({ width = 390, height = 844, scale = 2, mobile = tr
   ], { stdio: 'ignore' });
 
   let targets;
-  for (let i = 0; i < 80 && !targets; i++) {
+  for (let i = 0; i < 200 && !targets; i++) { // up to 30 s on a busy machine
     try { targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json(); } catch { await sleep(150); }
   }
   if (!targets) { proc.kill(); throw new Error('Browser did not start'); }

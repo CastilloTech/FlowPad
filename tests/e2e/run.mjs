@@ -29,6 +29,8 @@ for (const sc of scenarios.filter((s) => s.name.includes(filter))) {
   const page = await launch();
   try {
     await page.goto(url);
+    // a fresh profile sets up its storage first; wait for the library to appear
+    await page.eval(async () => { for (let i = 0; i < 80 && !document.querySelector('.row'); i++) await new Promise((r) => setTimeout(r, 100)); });
     await page.eval(helpers);
     let r = await page.eval(`(${asFunction(sc.run)})()`);
     if (sc.after && !(r && r.skipped)) {
@@ -38,6 +40,7 @@ for (const sc of scenarios.filter((s) => s.name.includes(filter))) {
       r = { ...r, ...(await page.eval(`(${asFunction(sc.after)})()`)) };
     }
     if (r && r.skipped) { skipped++; console.log(`- skip  ${sc.name} (${r.skipped})`); continue; }
+    if (process.env.E2E_VERBOSE) console.log(`  ${sc.name}:`, JSON.stringify(r));
     sc.check(r, assert);
     if (page.errors.length && !sc.allowErrors) throw new Error(`page errors:\n  ${page.errors.join('\n  ')}`);
     passed++;

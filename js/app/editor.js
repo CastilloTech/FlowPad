@@ -144,24 +144,56 @@ function Editor(id) {
     saveSoon('files', f);
   }
 
-  function rhymeColors(lines) {
-    const ends = lines.map((l) => { if (!isBar(l)) return null; const w = lastWordOf(l); return w ? syl.rhymeKey(w) : null; });
-    const cnt = {};
-    ends.forEach((k) => { if (k) cnt[k] = (cnt[k] || 0) + 1; });
-    const color = {};
-    let c = 0;
-    ends.forEach((k) => { if (k && cnt[k] > 1 && color[k] == null) color[k] = c++ % 6; });
-    return color;
+  /** A word that can carry a rhyme: not a little unstressed word like "the", "in", "a". */
+  const rhymeWord = (w) => { const i = syl.wordInfo(w); return i.n > 0 && !(i.n === 1 && i.syls[0].s === 0) && syl.clean(w).length > 1; };
+  /**
+   * Rhyme families per section (bars between labels and blank lines): two or more *different*
+   * words that rhyme anywhere in the section — at the ends of bars or inside them (take / bake,
+   * run / sun) — share an underline colour. The same word twice isn't a rhyme.
+   * Returns row → { rhymeKey: colour }.
+   */
+  /** One of the six underline colours for a rhyme sound — always the same one for the same sound. */
+  const hue = (k) => { let h = 0; for (let i = 0; i < k.length; i++) h = (h * 31 + k.charCodeAt(i)) | 0; return Math.abs(h) % 6; };
+  /** A bar line's rhyming words as [rhymeKey, word] — cached by the line, so a keystroke only redoes its own bar. */
+  const rhymes0 = new Map();
+  window.addEventListener('fp:lexicon', () => rhymes0.clear()); // new pronunciations, new keys
+  function barRhymes(text) {
+    let r = rhymes0.get(text);
+    if (!r) {
+      r = (text.match(/[A-Za-z'’]+/g) || []).filter(rhymeWord).map((w) => [syl.rhymeKey(w), syl.clean(w)]).filter(([k]) => k);
+      if (rhymes0.size > 3000) rhymes0.clear();
+      rhymes0.set(text, r);
+    }
+    return r;
   }
-  /** A bar's lyric: stress per syllable, end-rhyme underlines, and rhyme-chain highlights (mk). */
+  function rhymeFamilies(views) {
+    const out = new Map();
+    let run = [];
+    const flush = () => {
+      const words = new Map(); // rhyme key → the different words that have it
+      run.forEach((ri) => barRhymes(views[ri].text).forEach(([k, w]) => {
+        if (!words.has(k)) words.set(k, new Set());
+        words.get(k).add(w);
+      }));
+      // each rhyme sound keeps its own colour, so a new family never repaints the others
+      const color = {};
+      words.forEach((set, k) => { if (set.size > 1) color[k] = hue(k); });
+      run.forEach((ri) => out.set(ri, color));
+      run = [];
+    };
+    rows.forEach((r, i) => { if (r.type === 'bar') run.push(i); else flush(); });
+    flush();
+    return out;
+  }
+  /** A bar's lyric: stress per syllable, rhyme-family underlines, and rhyme-chain highlights (mk). */
   function lineHTML(l, color, mk) {
     let c = 0;
     return syl.analyzeLine(l).tokens.map((t) => {
       if (!t.word) return esc(t.text);
       if (t.syls[0] && t.syls[0].num) return `<span class="s1">${esc(t.text)}</span>`;
-      const k = syl.rhymeKey(t.text);
+      const k = rhymeWord(t.text) ? syl.rhymeKey(t.text) : '';
       const r = k && color[k] != null ? ` data-r="${color[k]}"` : '';
-      return `<span class="w"${r}>${t.syls.map((s) => {
+      return `<span class="w"${r}${k ? ` data-k="${esc(k)}"` : ''}>${t.syls.map((s) => {
         const m = mk ? mk[c++] : -1;
         return `<span class="s${s.s}${m >= 0 ? ' mc' : ''}"${m >= 0 ? ` data-c="${m % 6}"` : ''}>${esc(s.t)}</span>`;
       }).join('')}</span>`;
@@ -213,12 +245,12 @@ function Editor(id) {
   let shown = [];
   function paintAll() {
     const views = rows.map((r) => (r.type === 'bar' ? barView(r.cells) : null));
-    const color = rhymeColors(f.text.split('\n'));
+    const families = rhymeFamilies(views);
     const marks = chainMarks(views);
     let n = 0, total = 0;
     const html = rows.map((row, i) => {
       if (row.type === 'bar') { n++; total += syl.lineCount(views[i].text); }
-      return rowHTML(row, i, n, views[i], color, marks.get(i));
+      return rowHTML(row, i, n, views[i], families.get(i) || {}, marks.get(i));
     });
     const kids = box.children, changed = [];
     if (kids.length !== html.length) {
@@ -249,6 +281,7 @@ function Editor(id) {
       const b = blkEl(cur.r);
       if (b) { b.classList.add('cur'); const c = b.querySelectorAll('.cell')[cur.k]; if (c) c.classList.add('act'); }
     }
+    rhymeFocus();
     const pb = nowLine >= 0 && blkEl(nowLine);
     if (pb) {
       pb.classList.add('now');
@@ -414,6 +447,7 @@ function Editor(id) {
     if (c) c.classList.add('act');
     const b = blkEl(cur.r);
     if (b) b.classList.add('cur');
+    rhymeFocus();
     inp.value = rows[r].cells[cur.k] || '';
     inp.hidden = !focus;
     placeInput();
@@ -468,6 +502,30 @@ function Editor(id) {
     }
     const lf = lastFilled(p);
     activate(p, lf < 0 ? 0 : lf);
+  }
+
+  /**
+   * The steps holding the word on step k of row r — a word broken over steps ("mo-", "ney")
+   * carries on into the next filled step. Returns { k0, k1, text }, or null on a rest.
+   */
+  function wordAt(r, k) {
+    const cells = rows[r].cells;
+    if (!cells[k].trim()) return null;
+    const filled = cells.map((c, i) => (c.trim() ? i : -1)).filter((i) => i >= 0);
+    let a = filled.indexOf(k), z = a;
+    while (a > 0 && /-$/.test(cells[filled[a - 1]].trim())) a--;
+    while (z < filled.length - 1 && /-$/.test(cells[filled[z]].trim())) z++;
+    const text = filled.slice(a, z + 1).map((i) => cells[i].trim().replace(/-$/, '')).join('');
+    return { k0: filled[a], k1: filled[z], text };
+  }
+  /** Light up every word in the song that rhymes with the word on the selected step. */
+  function rhymeFocus() {
+    $$('.bline .w.rf', box).forEach((w) => w.classList.remove('rf'));
+    const wd = cur && isBarRow(cur.r) && wordAt(cur.r, cur.k);
+    const last = wd && (wd.text.match(/[A-Za-z'’]+(?=[^A-Za-z'’]*$)/) || [])[0];
+    if (!last || !rhymeWord(last)) return;
+    const k = syl.rhymeKey(last);
+    if (k) $$(`.bline .w[data-k="${CSS.escape(k)}"]`, box).forEach((w) => w.classList.add('rf'));
   }
 
   // step editing (js/sheet.js) on this song's rows; a bar inserted above shifts the cursor and playhead
@@ -823,27 +881,36 @@ function Editor(id) {
   };
 
   let lastW = 0;
-  const ro = new ResizeObserver(() => { const w = box.clientWidth; if (w !== lastW) { lastW = w; refitAll(); placeInput(); } });
+  // the sheet changed size: wider / narrower refits the step text; and since bars off-screen only
+  // take their real height once drawn, anything shifting moves the step box back over its step
+  const ro = new ResizeObserver(() => {
+    const w = box.clientWidth;
+    if (w !== lastW) { lastW = w; refitAll(); }
+    placeInput();
+  });
   ro.observe(box);
 
-  /** Drop a word from the strip, rhymes or bank onto the active step, then move on. */
+  /**
+   * A word from the strip, rhymes or bank goes onto the selected step: into a rest, finishing a
+   * half-typed word, or — when the step already holds a word — in its place (the strip shows
+   * rhymes for that word, so this swaps take → bake). Then the cursor moves on.
+   */
   function insertWord(w) {
     if (!cur) { const r = rows.findIndex((x) => x.type === 'bar'); if (r < 0) return; cur = { r, k: Math.min(15, lastFilled(r) + 1) }; }
     const row = rows[cur.r], k = cur.k;
     const ex = (row.cells[k] || '').trim().replace(/-$/, '');
-    const fits = !ex || w.toLowerCase().startsWith(ex.toLowerCase());
-    let p;
-    if (fits) p = placeWords(cur.r, k, [w]); // finishes the half-typed word
+    let p, swapped = null;
+    if (!ex || w.toLowerCase().startsWith(ex.toLowerCase())) p = placeWords(cur.r, k, [w]);
     else {
-      // goes after the words already here — into the next rest, or over the bar line
-      let j = k + 1;
-      while (j < 16 && row.cells[j].trim()) j++;
-      const at = j < 16 ? { r: cur.r, k: j } : nextPos(cur.r, 15);
-      p = placeWords(at.r, at.k, [w], false);
+      const old = wordAt(cur.r, k);
+      for (let i = old.k0; i <= old.k1; i++) row.cells[i] = '';
+      p = placeWords(cur.r, old.k0, [w]);
+      swapped = old.text;
     }
     commit();
     sound();
     activate(p.r, Math.min(15, p.k + 1), { focus: document.activeElement === inp });
+    if (swapped) toast(`Swapped “${swapped}” for “${w}”`, { label: 'Undo', fn: undo });
   }
 
   // ---------------- beat placement ----------------
