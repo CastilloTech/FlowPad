@@ -658,12 +658,15 @@ function editorAudio(ed) {
         lag: (tm.lat || 0) + 0.02,
         songBpm: tm.bpm,
       });
-      const beatCopy = stems.beat && stems.beat.map((c) => c.slice()); // the worker gets the stems; the A/B keeps the beat
+      // the A/B's beat, as something to play (one copy) — the worker gets the stems themselves
+      const beatBuf = stems.beat && toBuffer(stems.beat, stems.rate);
       // the vocal balanced over the beat, then mastered: in a worker, the screen stays smooth
       const m = await FP.mix.finishOffThread({ beat: stems.beat, vocal: stems.vocal, rawVoice: stems.raw, rate: stems.rate, target, ceilingDb: -1, preset });
       m.report.noise = noise;
-      const len = m.chans[0].length;
-      const blob = audio.encodeWav({ numberOfChannels: m.chans.length, length: len, sampleRate: stems.rate, getChannelData: (c) => m.chans[c] });
+      // the mix as something to play, then the file from that — not kept twice
+      const mixBuf = toBuffer(m.chans, stems.rate), len = mixBuf.length;
+      m.chans = null;
+      const blob = audio.encodeWav(mixBuf);
       const name = `${f.title} - ${t.name} (with beat).wav`;
       const file = window.File && new File([blob], name, { type: 'audio/wav' });
       const canShare = navigator.canShare && file && navigator.canShare({ files: [file] });
@@ -672,7 +675,7 @@ function editorAudio(ed) {
       if (Number.isFinite(m.lufs) && m.lufs < target - 0.6) m.report.short = true; // stopped short: louder would only crush it
       busy.close();
       // a fresh tap to share or save — the mixing took long enough that the browser wants one
-      const ab = abPlayer(toBuffer(m.chans, stems.rate), beatCopy && toBuffer(beatCopy, stems.rate), voice, m.lufs, m.rawLufs);
+      const ab = abPlayer(mixBuf, beatBuf, voice, m.lufs, m.rawLufs);
       const sh = sheet({
         title: 'Your mix is ready',
         html: `<p class="msg">${esc(name)} · ${fmtDur(len / stems.rate)} · ${mb} MB<br><span class="mlev">${esc(level)}</span></p>

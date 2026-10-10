@@ -63,8 +63,9 @@ test('finish: the vocal sits 1 LU over the beat, the mix at the target', () => {
   const rate = 44100;
   const beat = [noise(rate * 5, 0.3), noise(rate * 5, 0.3, 5)];
   const v = sine(5, rate, 220, 0.02);
-  const r = M.finish({ beat, vocal: [v, v], rate, target: -14 });
-  assert.ok(Math.abs(M.loudness([v.map((x) => x * M.fromDb(r.vocalGainDb)), v.map((x) => x * M.fromDb(r.vocalGainDb))], rate) - (M.loudness(beat, rate) + 1)) < 0.1);
+  const lb = M.loudness(beat, rate); // the mix takes its stems (and changes them in place)
+  const r = M.finish({ beat: beat.map((c) => c.slice()), vocal: [v.slice(), v.slice()], rate, target: -14 });
+  assert.ok(Math.abs(M.loudness([v.map((x) => x * M.fromDb(r.vocalGainDb)), v.map((x) => x * M.fromDb(r.vocalGainDb))], rate) - (lb + 1)) < 0.1);
   assert.ok(Math.abs(r.lufs - -14) < 0.5);
   assert.equal(r.chans[0].length, v.length);
   // no beat: just the vocal, mastered
@@ -185,7 +186,7 @@ test('presets: Radio sets the vocal further over the beat than Clean; Lo-fi less
 
 test('rawLufs: how loud the untouched original is, to compare the mix at the same loudness', () => {
   const rate = 44100, n = rate * 4, beat = [noise(n, 0.1, 71), noise(n, 0.1, 72)], v = sine(4, rate, 300, 0.1);
-  const r = M.finish({ beat: beat.map((c) => c.slice()), vocal: [v, v], rate, rawVoice: v.slice() });
+  const r = M.finish({ beat: beat.map((c) => c.slice()), vocal: [v.slice(), v.slice()], rate, rawVoice: v.slice() });
   const sum = beat.map((c) => c.map((x, i) => x + v[i]));
   assert.ok(Math.abs(r.rawLufs - M.loudness(sum, rate)) < 0.05);
 });

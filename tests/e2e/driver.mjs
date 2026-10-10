@@ -54,6 +54,8 @@ export async function launch({ width = 390, height = 844, scale = 2, mobile = tr
 
   return {
     errors,
+    /** A raw DevTools Protocol command (e.g. CPU throttling for performance checks). */
+    send,
     async goto(url) { await send('Page.enable'); await send('Page.navigate', { url }); await sleep(1500); },
     /** Evaluate an expression (or a function's source called with no arguments) and return its value. */
     async eval(code) {

@@ -731,7 +731,7 @@ export default [
       // typing fills the slots in order
       await type('one '); await type('two '); await type('three '); await type('four ');
       out.written = steps(B());
-      out.movedOn = document.querySelector('.cell.act')?.dataset.r === String(+B().querySelector('.cell').dataset.r + 1);
+      out.movedOn = document.querySelector('.cell.act')?.closest('.blk').dataset.r === String(+B().dataset.r + 1);
       // hear the bar: its own playback, the playhead on it
       B().querySelector('[data-a="bar-menu"]').click(); await sleep(300);
       menu(/Hear this bar/).click();

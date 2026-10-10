@@ -23,8 +23,8 @@
     const hp = [1, -2, 1, (2 * (K * K - 1)) / a0, (1 - K / Q2 + K * K) / a0];
     return [shelf, hp];
   }
-  function biquad(x, [b0, b1, b2, a1, a2]) {
-    const y = new Float32Array(x.length);
+  /** A biquad over x, into `y` — a new array, or x itself (in place: it only reads a sample before writing it). */
+  function biquad(x, [b0, b1, b2, a1, a2], y = new Float32Array(x.length)) {
     let z1 = 0, z2 = 0;
     for (let i = 0; i < x.length; i++) {
       const v = x[i], o = b0 * v + z1;
@@ -41,10 +41,15 @@
    */
   function loudness(chans, rate) {
     const [shelf, hp] = kFilters(rate);
-    const hop = Math.round(0.1 * rate), hops = Math.floor(chans[0].length / hop);
-    const e = new Float64Array(hops); // K-weighted energy per 100 ms, summed over the channels
-    for (const c of chans) {
-      const k = biquad(biquad(c, shelf), hp);
+    // a channel can be given as a function that makes it — then only one exists at a time
+    const chan = (c) => (typeof c === 'function' ? c() : c);
+    let hops = 0, e = null; // K-weighted energy per 100 ms, summed over the channels
+    const hop = Math.round(0.1 * rate);
+    for (const c0 of chans) {
+      const c = chan(c0);
+      if (!e) { hops = Math.floor(c.length / hop); e = new Float64Array(hops); }
+      const k = biquad(c, shelf);
+      biquad(k, hp, k);
       for (let j = 0; j < hops; j++) {
         let a = 0;
         for (let i = j * hop, z = i + hop; i < z; i++) a += k[i] * k[i];
@@ -99,8 +104,10 @@
    * A look-ahead peak limiter: no sample goes over `ceiling` (linear). The gain starts coming down
    * `lookahead` seconds before a peak, so it never snaps, and comes back over `release` seconds.
    */
-  function limit(chans, rate, { ceiling = fromDb(-1), lookahead = 0.005, release = 0.08 } = {}) {
+  function limit(chans, rate, { ceiling = fromDb(-1), lookahead = 0.005, release = 0.08, gain = 1, into = null } = {}) {
+    // `gain` is applied on the way in (no turned-up copy); `into` takes the output (chans itself works)
     const n = chans[0].length, W = Math.max(1, Math.round(lookahead * rate));
+    const cg = ceiling / gain; // the ceiling, as a level of the input
     // the gain each sample needs to stay under the ceiling — counting the peaks between it and the
     // next sample too (a cubic guess at ¼, ½, ¾ of the way), which bright, loud mixes are full of
     const need = new Float32Array(n);
@@ -110,42 +117,42 @@
       for (const c of chans) {
         const y0 = c[i > 0 ? i - 1 : 0], y1 = c[i], y2 = c[i + 1 < n ? i + 1 : i], y3 = c[i + 2 < n ? i + 2 : n - 1];
         p = Math.max(p, Math.abs(y1));
-        if (y1 < ceiling * 0.7 && y1 > -ceiling * 0.7 && y2 < ceiling * 0.7 && y2 > -ceiling * 0.7) continue; // nowhere near: skip the guess
+        if (y1 < cg * 0.7 && y1 > -cg * 0.7 && y2 < cg * 0.7 && y2 > -cg * 0.7) continue; // nowhere near: skip the guess
         const a = -0.5 * y0 + 1.5 * y1 - 1.5 * y2 + 0.5 * y3, b = y0 - 2.5 * y1 + 2 * y2 - 0.5 * y3, d = -0.5 * y0 + 0.5 * y2;
         const q1 = Math.abs(((a * 0.25 + b) * 0.25 + d) * 0.25 + y1), q2 = Math.abs(((a * 0.5 + b) * 0.5 + d) * 0.5 + y1), q3 = Math.abs(((a * 0.75 + b) * 0.75 + d) * 0.75 + y1);
         after = Math.max(after, q1, q2, q3);
       }
       p = Math.max(p, after); // a peak between two samples needs both of them turned down
       before = after;
-      need[i] = p > ceiling ? ceiling / p : 1;
+      need[i] = p > cg ? cg / p : 1;
     }
-    // the lowest of the next W samples' needs (a sliding minimum, scanning backwards)
-    const ahead = new Float32Array(n), dq = new Int32Array(n);
-    let h = 0, t = 0;
+    // the lowest of the next W samples' needs (a sliding minimum, scanning backwards); the deque
+    // never holds more than a window's worth, so it's a ring that size
+    const ahead = new Float32Array(n), R = W + 2, dq = new Int32Array(R);
+    let h = 0, t = 0; // as counts; positions are mod R
     for (let i = n - 1; i >= 0; i--) {
-      while (t > h && need[dq[t - 1]] >= need[i]) t--;
-      dq[t++] = i;
-      while (dq[h] > i + W - 1) h++;
-      ahead[i] = need[dq[h]];
+      while (t > h && need[dq[(t - 1) % R]] >= need[i]) t--;
+      dq[t % R] = i; t++;
+      while (dq[h % R] > i + W - 1) h++;
+      ahead[i] = need[dq[h % R]];
     }
     // averaged over the last W samples — every one of them covers the peak, so the average still
     // holds it under — then released slowly; coming down is never slower than the average
     const rc = 1 - Math.exp(-1 / (release * rate));
-    const out = chans.map(() => new Float32Array(n));
+    const out = into || chans.map(() => new Float32Array(n));
     let acc = W, g = 1;
     for (let i = 0; i < n; i++) {
       acc += ahead[i] - (i >= W ? ahead[i - W] : 1);
       const avg = acc / W;
       g = avg < g ? avg : g + (avg - g) * rc;
       for (let c = 0; c < chans.length; c++) {
-        const v = chans[c][i] * g;
+        const v = chans[c][i] * g * gain;
         out[c][i] = v > ceiling ? ceiling : v < -ceiling ? -ceiling : v; // rounding, never more
       }
     }
     return out;
   }
 
-  const scaled = (c, g) => { const y = new Float32Array(c.length); for (let i = 0; i < c.length; i++) y[i] = c[i] * g; return y; };
 
   /**
    * Bring a mix to `target` LUFS with its true peak at most `ceilingDb`: turn it up (or down),
@@ -158,7 +165,7 @@
     let gainDb = Math.min(maxGainDb, target - before), prev = null, best = null;
     for (let round = 0; round < 6; round++) {
       // the limiter already allows for peaks between samples; the exact check is once, at the end
-      const out = limit(chans.map((c) => scaled(c, fromDb(gainDb))), rate, { ceiling: fromDb(ceilingDb) });
+      const out = limit(chans, rate, { ceiling: fromDb(ceilingDb), gain: fromDb(gainDb) });
       const lufs = loudness(out, rate);
       // a round wins if it's on target, or clearly closer for what it costs: gain that buys almost
       // no loudness (a spiky mix, already at the ceiling) would only flatten the hits harder
@@ -175,9 +182,9 @@
     // much, which brings every peak down exactly with it
     let { chans: out, lufs } = best, tp = toDb(truePeak(out));
     if (tp > ceilingDb) {
-      out = limit(out, rate, { ceiling: fromDb(ceilingDb - (tp - ceilingDb) - 0.05) });
+      limit(out, rate, { ceiling: fromDb(ceilingDb - (tp - ceilingDb) - 0.05), into: out });
       tp = toDb(truePeak(out));
-      if (tp > ceilingDb) { out = out.map((c) => scaled(c, fromDb(ceilingDb - 0.02 - tp))); tp = ceilingDb - 0.02; }
+      if (tp > ceilingDb) { const g = fromDb(ceilingDb - 0.02 - tp); for (const c of out) for (let i = 0; i < c.length; i++) c[i] *= g; tp = ceilingDb - 0.02; }
       lufs = loudness(out, rate);
     }
     return { chans: out, lufs, gainDb: best.gainDb, peakDb: tp };
@@ -248,7 +255,7 @@
    * edges don't count as a quiet phrase). Gaps keep the gain of the phrase before — silence is
    * never turned up past it.
    */
-  function ride(chans, rate, { range = 6, amount = 0.7 } = {}) {
+  function ride(chans, rate, { range = 6, amount = 0.7, inPlace = false } = {}) {
     const hop = Math.round(0.05 * rate), lv = levels(monoOf(chans), hop, hop), voiced = voicedOf(lv);
     // phrases: voiced runs, joined over gaps shorter than ¼ s
     const phrases = [];
@@ -272,7 +279,7 @@
     const g = perSample(sm, hop, chans[0].length);
     const gains = phrases.map((p) => gDb[p.a]);
     return {
-      chans: chans.map((c) => { const y = new Float32Array(c.length); for (let i = 0; i < c.length; i++) y[i] = c[i] * g[i]; return y; }),
+      chans: chans.map((c) => { const y = inPlace ? c : new Float32Array(c.length); for (let i = 0; i < c.length; i++) y[i] = c[i] * g[i]; return y; }),
       range: [Math.min(0, ...gains), Math.max(0, ...gains)],
     };
   }
@@ -309,16 +316,22 @@
       return { hz, db: Math.round(db * 2) / 2 };
     }).filter((m) => Math.abs(m.db) >= 1 && m.hz < rate * 0.45);
   }
-  const applyEq = (chans, rate, plan) => chans.map((c) => plan.reduce((y, m) => biquad(y, rbj('peak', m.hz, rate, 1, m.db)), c));
+  /** The plan's peaking filters over each channel — one copy each, or none with `inPlace`. */
+  const applyEq = (chans, rate, plan, inPlace = false) => chans.map((c) => {
+    const y = inPlace ? c : Float32Array.from(c);
+    for (const m of plan) biquad(y, rbj('peak', m.hz, rate, 1, m.db), y);
+    return y;
+  });
 
   /**
    * De-essing: where the top (over `freq`) is close to as loud as the whole voice — an "s", "sh",
    * "t" — that top is turned down, by up to `maxCut` dB, for just as long as it lasts. The voice is
    * split with a Linkwitz-Riley crossover, whose two halves add back up flat.
    */
-  function deEss(chans, rate, { freq = 5500, threshold = -8, maxCut = 8 } = {}) {
+  function deEss(chans, rate, { freq = 5500, threshold = -8, maxCut = 8, inPlace = false } = {}) {
     const hp = rbj('high', freq, rate, 0.707), lp = rbj('low', freq, rate, 0.707);
-    const top = (x) => biquad(biquad(x, hp), hp), bottom = (x) => biquad(biquad(x, lp), lp);
+    const top = (x) => { const y = biquad(x, hp); return biquad(y, hp, y); };
+    const bottom = (x, y = new Float32Array(x.length)) => { biquad(x, lp, y); return biquad(y, lp, y); };
     const x = monoOf(chans), hop = Math.round(0.002 * rate), win = Math.round(0.006 * rate);
     const lx = levels(x, win, hop), ls = levels(top(x), win, hop);
     const cut = new Float32Array(lx.length);
@@ -329,18 +342,18 @@
     if (most > -0.5) return { chans, most: 0 }; // nothing harsh: leave it exactly as it was
     const g = perSample(sm, hop, x.length);
     return {
-      chans: chans.map((c) => { const t = top(c), b = bottom(c), y = new Float32Array(c.length); for (let i = 0; i < c.length; i++) y[i] = b[i] + t[i] * g[i]; return y; }),
+      chans: chans.map((c) => { const t = top(c), y = bottom(c, inPlace ? c : undefined); for (let i = 0; i < c.length; i++) y[i] += t[i] * g[i]; return y; }),
       most,
     };
   }
 
   /** Ducking: while the vocal's going, the beat's 1–4 kHz (where words are understood) dips by up to `depth` dB. */
-  function duck(beat, vocal, rate, { depth = 3 } = {}) {
+  function duck(beat, vocal, rate, { depth = 3, inPlace = false } = {}) {
     const hop = Math.round(0.01 * rate), voiced = voicedOf(levels(monoOf(vocal), Math.round(0.03 * rate), hop));
     const amt = smooth(Float32Array.from(voiced, (v) => (v ? -depth : 0)), 0.02 * rate / hop, 0.3 * rate / hop);
     const g = perSample(amt, hop, beat[0].length);
     const band = rbj('band', 2200, rate, 0.7);
-    return beat.map((c) => { const m = biquad(c, band), y = new Float32Array(c.length); for (let i = 0; i < c.length; i++) y[i] = c[i] + m[i] * (g[i] - 1); return y; });
+    return beat.map((c) => { const m = biquad(c, band), y = inPlace ? c : new Float32Array(c.length); for (let i = 0; i < c.length; i++) y[i] = c[i] + m[i] * (g[i] - 1); return y; });
   }
 
   /**
@@ -458,34 +471,40 @@
    * take, untouched — is, so the two can be compared at the same loudness. `report` says what was done.
    */
   function finish({ beat, vocal, rate, target = -14, ceilingDb = -1, preset = null, rawVoice = null }) {
+    // the stems are the mix's own: worked on in place (a phone's memory is short). One array given
+    // for both channels is copied, so the two can differ.
+    if (vocal[1] === vocal[0]) vocal = [vocal[0], Float32Array.from(vocal[0])];
+    if (beat && beat[1] === beat[0]) beat = [beat[0], Float32Array.from(beat[0])];
     const report = {}, P = PRESETS[preset];
     let rawLufs = null;
     if (rawVoice) {
+      // the untouched original's loudness, made a channel at a time
       const n = vocal[0].length;
-      const raw = [0, 1].map((c) => { const y = new Float32Array(n), b = beat && (beat[c] || beat[0]); for (let i = 0; i < n; i++) y[i] = (i < rawVoice.length ? rawVoice[i] : 0) + (b && i < b.length ? b[i] : 0); return y; });
-      rawLufs = loudness(raw, rate);
+      rawLufs = loudness([0, 1].map((c) => () => { const y = new Float32Array(n), b = beat && (beat[c] || beat[0]); for (let i = 0; i < n; i++) y[i] = (i < rawVoice.length ? rawVoice[i] : 0) + (b && i < b.length ? b[i] : 0); return y; }), rate);
     }
     if (P) {
       report.preset = P.name;
-      const r = ride(vocal, rate);
-      report.ride = r.range;
-      const plan = eqPlan(r.chans, rate, { amount: P.eqAmount, presence: P.presence });
+      report.ride = ride(vocal, rate, { inPlace: true }).range;
+      const plan = eqPlan(vocal, rate, { amount: P.eqAmount, presence: P.presence });
       report.eq = plan;
-      const d = deEss(applyEq(r.chans, rate, plan), rate);
+      applyEq(vocal, rate, plan, true);
+      const d = deEss(vocal, rate, { inPlace: true });
       report.deEss = d.most;
       vocal = d.chans;
     }
     const over = P ? P.over : 1;
     const lv = loudness(vocal, rate), lb = beat ? loudness(beat, rate) : -Infinity;
     const vocalGainDb = Number.isFinite(lv) && Number.isFinite(lb) ? Math.max(-18, Math.min(30, lb + over - lv)) : 0;
-    if (beat && Number.isFinite(lv)) { const depth = P ? P.duck : 3; beat = duck(beat, vocal, rate, { depth }); report.duck = depth; }
+    if (beat && Number.isFinite(lv)) { const depth = P ? P.duck : 3; beat = duck(beat, vocal, rate, { depth, inPlace: true }); report.duck = depth; }
+    // the mix, summed into the vocal's own arrays
     const gv = fromDb(vocalGainDb), n = vocal[0].length;
-    let sum = vocal.map((v, c) => {
-      const y = new Float32Array(n), b = beat && (beat[c] || beat[0]);
-      for (let i = 0; i < n; i++) y[i] = v[i] * gv + (b && i < b.length ? b[i] : 0);
-      return y;
+    const sum = vocal.map((v, c) => {
+      const b = beat && (beat[c] || beat[0]);
+      for (let i = 0; i < n; i++) v[i] = v[i] * gv + (b && i < b.length ? b[i] : 0);
+      return v;
     });
-    if (P && P.mixLowpass) { const lp = rbj('low', P.mixLowpass, rate, 0.707); sum = sum.map((c) => biquad(c, lp)); }
+    beat = null;
+    if (P && P.mixLowpass) { const lp = rbj('low', P.mixLowpass, rate, 0.707); for (const c of sum) biquad(c, lp, c); }
     return { ...master(sum, rate, { target, ceilingDb }), vocalGainDb, report, rawLufs };
   }
 
