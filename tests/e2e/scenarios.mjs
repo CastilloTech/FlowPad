@@ -182,6 +182,33 @@ export default [
   },
 
   {
+    name: 'beat on iPhone: MP3s and videos in the picker, a silent video refused, sound past the silent switch',
+    async run() {
+      const { sleep } = E2E;
+      // Safari's audio session, stood in for: the app asks to play like a music app
+      Object.defineProperty(navigator, 'audioSession', { value: { type: 'auto' }, configurable: true });
+      document.querySelector('.row').click(); await sleep(500);
+      E2E.dock(/Beat/).click(); await sleep(300);
+      const out = { accept: document.querySelector('#tfile').accept.split(',') };
+      FP.audio.ensure();
+      out.session = navigator.audioSession.type;
+      // a "movie" whose sound decodes to silence: a message, and no beat
+      const silent = E2E.wav(new Float32Array(22050 * 3), 22050);
+      E2E.choose(document.querySelector('#tfile'), new File([silent], 'clip.mp4', { type: 'video/mp4' })); await sleep(1200);
+      out.toast = document.querySelector('#toast').textContent;
+      out.noForm = !document.querySelector('.beatform');
+      out.noBeat = !document.querySelector('.trackbox') && !!document.querySelector('[data-a="timport"]');
+      return out;
+    },
+    check(r, assert) {
+      for (const t of ['.mp3', 'audio/mpeg', '.m4a', '.wav', 'video/mp4', '.mov']) assert.ok(r.accept.includes(t), `the picker offers ${t}`);
+      assert.equal(r.session, 'playback');
+      assert.match(r.toast, /No sound found in that video/);
+      assert.ok(r.noForm && r.noBeat);
+    },
+  },
+
+  {
     name: 'beat: import, tempo guess, line up bar 1, drums layer, remove',
     audio: true,
     async run() {

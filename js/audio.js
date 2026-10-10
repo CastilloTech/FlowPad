@@ -5,8 +5,17 @@
   let ctx = null, out = null, noise = null;
   let userLat = null; // seconds, measured by the headphone delay test (null = trust the browser)
 
+  /**
+   * iPhone: a web page's sound is muted by the silent switch unless it says it's playing music
+   * (like the Music app). While recording it says so too, with the mic on. Safari 16.4+; elsewhere
+   * there's no switch to worry about.
+   */
+  function session(type) {
+    try { if (navigator.audioSession && navigator.audioSession.type !== type) navigator.audioSession.type = type; } catch (e) { /* not allowed here */ }
+  }
   function ensure() {
     if (!ctx) {
+      session('playback');
       const AC = window.AudioContext || window.webkitAudioContext;
       ctx = new AC();
       const comp = ctx.createDynamicsCompressor();
@@ -395,6 +404,12 @@
   function stopLoops() { loops.forEach((s) => { try { s.stop(); } catch (e) { /* already done */ } }); loops.clear(); }
 
   /** Decode an audio file (Blob) on the shared context. */
+  /** The loudest sample in a buffer (0–1), checking every 4th sample — enough to tell sound from silence. */
+  const peakOf = (buf) => {
+    let p = 0;
+    for (let c = 0; c < buf.numberOfChannels; c++) { const d = buf.getChannelData(c); for (let i = 0; i < d.length; i += 4) { const v = d[i] < 0 ? -d[i] : d[i]; if (v > p) p = v; } }
+    return p;
+  };
   async function decode(blob) {
     ensure();
     const data = await blob.arrayBuffer();
@@ -469,6 +484,7 @@
     timeline: () => ({ log: tr.log.slice(), bpm: tr.bpm }),
     loopAt: (t, o) => { ensure(); loopAt(t, o); },
     decode,
+    peakOf,
     guessBpm,
     barFeatures,
     /** Play a decoded take at audio-clock time t; returns a stop function. */
@@ -488,6 +504,7 @@
     setLatency(s) { userLat = s == null ? null : Math.max(0, Math.min(0.6, s)); },
     clickAt(t, accent) { ensure(); voices.click(t, accent); },
     blipAt(t, strong) { ensure(); voices.blip(t, strong); },
+    session,
     /** Hear a cadence: a bar of clicks, then the cadence's hits as blips over clicks. */
     previewRhythm({ steps, n = 16, bpm }) {
       ensure();
@@ -512,6 +529,7 @@
   const supported = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
 
   async function start(onLevel) {
+    FP.audio.session('play-and-record'); // the beat keeps playing while the mic is on
     stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
     });
@@ -555,6 +573,7 @@
   }
 
   function cleanup() {
+    FP.audio.session('playback');
     cancelAnimationFrame(raf);
     if (src) { try { src.disconnect(); } catch (e) { /* ignore */ } }
     if (stream) stream.getTracks().forEach((t) => t.stop());

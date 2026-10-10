@@ -4,6 +4,12 @@
  */
 'use strict';
 
+/**
+ * Beat files the picker offers. iPhones grey out MP3s for a bare "audio/*", so the types are spelled
+ * out — and videos are in, since a beat sometimes comes as one.
+ */
+const BEAT_TYPES = 'audio/*,audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/x-wav,audio/aiff,audio/x-aiff,audio/flac,audio/ogg,video/mp4,video/quicktime,.mp3,.m4a,.aac,.wav,.aif,.aiff,.flac,.ogg,.oga,.opus,.mp4,.m4v,.mov';
+
 function editorAudio(ed) {
   const { f, rows, panel, stripEl, closeBtn, inp, commit, paintAll, blkEl, updateStrip, beatChanged } = ed;
   const activate = (r, k) => ed.activate(r, k);
@@ -23,7 +29,7 @@ function editorAudio(ed) {
           <div class="struct-act"><button class="chip sm" data-a="sedit">${icon('edit', 'sm')}Edit structure</button><button class="chip sm" data-a="slayout">${icon('project', 'sm')}Lay out song to match</button></div>`
         : `<div class="struct-act"><button class="chip sm" data-a="sfind">${icon('sparkle', 'sm')}Find the beat’s structure</button></div>`;
     panel.innerHTML = `<div class="ph"><div class="chips scroll grow">${patternsSorted().map((p) => `<button class="chip sm ${p.id === pat.id ? 'on' : ''}" data-a="bpick" data-id="${p.id}">${esc(p.name)}</button>`).join('')}<button class="chip sm ghost" data-a="bnew">${icon('plus', 'sm')}New</button></div><button class="icon-btn muted" data-a="bmore" aria-label="Pattern options">${icon('more')}</button>${closeBtn}</div>
-      ${trackHTML}${structHTML}<input type="file" id="tfile" accept="audio/*" hidden>
+      ${trackHTML}${structHTML}<input type="file" id="tfile" accept="${BEAT_TYPES}" hidden>
       <div class="seq" id="seq">${[0, 1].map((h) => `<div class="half">${TRACKS.map((t) => `<div class="trk"><span class="tl">${t.name}</span>${range(8).map((j) => { const k = h * 8 + j; const on = !!pat.steps[t.id][k]; return `<button class="st ${on ? 'on' : ''} ${k % 4 === 0 ? 'b' : ''}" data-a="step" data-t="${t.id}" data-k="${k}" aria-label="${t.name} step ${k + 1}" aria-pressed="${on}"></button>`; }).join('')}</div>`).join('')}</div>`).join('')}</div>
       <div class="beat-ctl">${bpmCtl(f.bpm)}
         <label class="mini"><span>Swing</span><input type="range" class="range" id="swing" min="0" max="40" value="${Math.round(f.swing * 100)}"></label>
@@ -43,7 +49,13 @@ function editorAudio(ed) {
   async function importBeat(fl) {
     toast('Loading your beat…');
     let buf;
-    try { buf = await audio.decode(fl); } catch (e) { toast('Couldn’t read that audio file'); return; }
+    try { buf = await audio.decode(fl); } catch (e) { toast('Couldn’t read that file. MP3, M4A, WAV or AAC work best.'); return; }
+    // a video whose sound this browser can't read decodes to silence: say so, rather than guess a
+    // tempo and sections from nothing
+    if (audio.peakOf(buf) < 0.001) {
+      toast(/^video\//.test(fl.type) || /\.(mov|mp4|m4v)$/i.test(fl.name) ? 'No sound found in that video. Save its audio as an MP3 or M4A and import that.' : 'That file is silent: no beat to import.');
+      return;
+    }
     const named = fl.name.match(/(\d{2,3})\s*bpm/i); // most beat files say their tempo
     const guess = named ? +named[1] : audio.guessBpm(buf);
     const b = { id: FP.uid(), name: fl.name.replace(/\.[^.]+$/, '') || 'My beat', blob: fl, mime: fl.type, bpm: clamp(Math.round(guess || f.bpm), 50, 220), offset: 0, bars: 4, duration: buf.duration, created: Date.now() };
