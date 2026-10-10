@@ -5,7 +5,7 @@ global.window = global;
 global.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
 global.fetch = () => new Promise(() => {}); // never resolves: tests run on the offline heuristics
 
-for (const f of ['syllables.js', 'sheet.js', 'structure.js', 'cadence.js', 'voice.js']) require(path.join(__dirname, '..', 'js', f));
+for (const f of ['syllables.js', 'sheet.js', 'structure.js', 'cadence.js', 'voice.js', 'mix.js']) require(path.join(__dirname, '..', 'js', f));
 window.FP.syl.online = false;
 
 module.exports = window.FP;

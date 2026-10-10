@@ -270,39 +270,86 @@
    * ({ buffer, offset, bars, bpm, rate }) or null; lag: how much later than the beat the voice
    * landed on the recording (speaker + mic delay). Returns a stereo AudioBuffer.
    */
-  async function renderMix({ voice, steps, getBar, track, lag = 0, songBpm }) {
+  /**
+   * A take's stems, rendered offline: the beat (drum patterns and / or the imported beat, as heard
+   * while recording) and the vocal — through a polish chain when `polish`. Mixing and mastering them
+   * is js/mix.js. Resolves { beat: [L, R] | null, vocal: [L, R], rate }.
+   */
+  async function renderStems({ voice, steps, getBar, track, lag = 0, songBpm, polish = true }) {
     const rate = 44100, OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-    const off = new OAC(2, Math.ceil((voice.duration + 0.4) * rate), rate);
-    // a gentle limiter on the whole mix, so the beat and the voice together never clip
-    const master = off.createDynamicsCompressor();
-    master.threshold.value = -6; master.knee.value = 6; master.ratio.value = 12; master.attack.value = 0.003; master.release.value = 0.15;
-    master.connect(off.destination);
-    // drums through the same bus as live
-    const bus = off.createGain(), comp = off.createDynamicsCompressor();
-    bus.gain.value = 0.85; comp.threshold.value = -12; comp.ratio.value = 4;
-    bus.connect(comp).connect(master);
-    const kit = makeVoices(off, bus, makeNoise(off));
-    const end = voice.duration;
-    for (const s of steps) {
-      const t = s.t + lag;
-      if (s.bar < 0 || t < 0 || t > end) continue; // no count-in clicks in the mix
-      const pat = getBar ? getBar(s.bar) : null;
-      if (pat) for (const k of ['kick', 'snare', 'clap', 'hat', 'open']) { const v = pat[k] && pat[k][s.step]; if (v) kit[k](t, v > 1 ? 1.25 : 1); }
-      if (track && s.step === 0 && s.bar % track.bars === 0) {
-        const src = off.createBufferSource(), g = off.createGain();
-        src.buffer = track.buffer;
-        src.playbackRate.value = track.rate || 1;
-        g.gain.value = 0.9;
-        src.connect(g).connect(master);
-        src.start(t, Math.max(0, track.offset || 0));
-        src.stop(t + (track.bars * 240) / songBpm);
+    const len = Math.ceil((voice.duration + 0.4) * rate);
+    // the beat: drums through the same bus as live, the imported beat on its bar lines
+    let beat = null;
+    if (getBar || track) {
+      const off = new OAC(2, len, rate);
+      const bus = off.createGain(), comp = off.createDynamicsCompressor();
+      bus.gain.value = 0.85; comp.threshold.value = -12; comp.ratio.value = 4;
+      bus.connect(comp).connect(off.destination);
+      const kit = makeVoices(off, bus, makeNoise(off));
+      const end = voice.duration;
+      for (const s of steps) {
+        const t = s.t + lag;
+        if (s.bar < 0 || t < 0 || t > end) continue; // no count-in clicks in the mix
+        const pat = getBar ? getBar(s.bar) : null;
+        if (pat) for (const k of ['kick', 'snare', 'clap', 'hat', 'open']) { const v = pat[k] && pat[k][s.step]; if (v) kit[k](t, v > 1 ? 1.25 : 1); }
+        if (track && s.step === 0 && s.bar % track.bars === 0) {
+          const src = off.createBufferSource(), g = off.createGain();
+          src.buffer = track.buffer;
+          src.playbackRate.value = track.rate || 1;
+          g.gain.value = 0.9;
+          src.connect(g).connect(off.destination);
+          src.start(t, Math.max(0, track.offset || 0));
+          src.stop(t + (track.bars * 240) / songBpm);
+        }
       }
+      const b = await off.startRendering();
+      beat = [b.getChannelData(0), b.getChannelData(1)];
     }
+    // the vocal, in the middle of both channels
+    const off = new OAC(2, len, rate);
     const vs = off.createBufferSource();
     vs.buffer = voice;
-    vs.connect(master);
+    if (polish) vocalChain(off, vs, voice).connect(off.destination);
+    else vs.connect(off.destination);
     vs.start(0);
-    return off.startRendering();
+    const v = await off.startRendering();
+    return { beat, vocal: [v.getChannelData(0), v.getChannelData(1)], rate };
+  }
+
+  /**
+   * A fixed vocal chain for a phone or laptop mic: brought to a steady level first (so the
+   * compressor works the same on a quiet or a loud take), low rumble off, a little mud out,
+   * presence and air in, evened out, then a short room around it. Returns its output node.
+   */
+  function vocalChain(c, src, voice) {
+    const lufs = FP.mix ? FP.mix.loudness([voice.getChannelData(0)], voice.sampleRate) : -20;
+    const pre = c.createGain();
+    pre.gain.value = Number.isFinite(lufs) ? Math.min(FP.mix.fromDb(30), FP.mix.fromDb(-18 - lufs)) : 1;
+    const f = (type, freq, gain = 0, Q = 0.707) => { const b = c.createBiquadFilter(); b.type = type; b.frequency.value = freq; b.gain.value = gain; b.Q.value = Q; return b; };
+    const comp = c.createDynamicsCompressor();
+    comp.threshold.value = -24; comp.knee.value = 8; comp.ratio.value = 3; comp.attack.value = 0.006; comp.release.value = 0.15;
+    let node = src.connect(pre)
+      .connect(f('highpass', 90))
+      .connect(f('peaking', 320, -3, 1.1))
+      .connect(f('peaking', 3200, 2.5, 0.9))
+      .connect(f('highshelf', 10000, 2.5))
+      .connect(comp);
+    // the room: a short, dark, stereo tail, mixed in low (20 ms in, so the words stay up front)
+    const out = c.createGain(), dry = c.createGain(), wet = c.createGain(), pd = c.createDelay(0.1), verb = c.createConvolver();
+    dry.gain.value = 1; wet.gain.value = 0.14; pd.delayTime.value = 0.02;
+    verb.buffer = roomIR(c, 1.1);
+    node.connect(dry).connect(out);
+    node.connect(pd).connect(f('lowpass', 6500)).connect(verb).connect(wet).connect(out);
+    return out;
+  }
+  /** A room's impulse response: decaying noise, different in each ear. */
+  function roomIR(c, secs) {
+    const n = Math.round(secs * c.sampleRate), ir = c.createBuffer(2, n, c.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = ir.getChannelData(ch);
+      for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.exp((-5 * i) / n) * 0.5;
+    }
+    return ir;
   }
 
   /** A 16-bit PCM WAV file from an AudioBuffer. */
@@ -442,7 +489,7 @@
       steps.forEach((k) => voices.blip(t0 + bar + (k / n) * bar, k % (n / 4) === 0));
     },
     previewBeat,
-    renderMix,
+    renderStems,
     encodeWav,
     on(fn) { listeners.add(fn); return () => listeners.delete(fn); },
   };

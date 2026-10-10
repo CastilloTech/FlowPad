@@ -118,12 +118,17 @@ export default [
       let saved = null;
       window.download = (name, blob) => { saved = { name, blob }; };
       document.querySelector('.take [data-a="tmore"]').click(); await sleep(300);
-      E2E.menu(/Export with the beat/).click();
-      for (let i = 0; i < 60 && !document.querySelector('.sheet [data-a="msave"]'); i++) await sleep(100);
+      E2E.menu(/Export with the beat/).click(); await sleep(350);
+      out.mixOpts = { polish: document.querySelector('#mpol').checked, target: document.querySelector('#mtgt .on').textContent };
+      document.querySelector('.sheet [data-a="mgo"]').click();
+      for (let i = 0; i < 100 && !document.querySelector('.sheet [data-a="msave"]'); i++) await sleep(100);
+      out.mixLevel = document.querySelector('.sheet .mlev')?.textContent;
       document.querySelector('.sheet [data-a="msave"]').click(); await sleep(200);
       out.mixName = saved && saved.name;
       const ctxA = FP.audio.ensure();
-      const mix = await new Promise((r, j) => saved.blob.arrayBuffer().then((d) => ctxA.decodeAudioData(d, r, j)));
+      // read at the file's own rate (44.1 kHz): resampling to the device's rate would add its own overshoot
+      const at44 = new OfflineAudioContext(2, 1, 44100);
+      const mix = await new Promise((r, j) => saved.blob.arrayBuffer().then((d) => at44.decodeAudioData(d, r, j)));
       const take = await (await new Promise((r) => { const q = indexedDB.open('flowpad'); q.onsuccess = () => { const g = q.result.transaction('recordings').objectStore('recordings').getAll(); g.onsuccess = () => r(g.result[0]); }; })).blob.arrayBuffer().then((d) => new Promise((r, j) => ctxA.decodeAudioData(d, r, j)));
       const tl = (await new Promise((r) => { const q = indexedDB.open('flowpad'); q.onsuccess = () => { const g = q.result.transaction('recordings').objectStore('recordings').getAll(); g.onsuccess = () => r(g.result[0].timing); }; }));
       // Boom Bap kicks on steps 1, 8, 11 of each bar — step 8 (index 7) is odd, where the voice is silent
@@ -136,6 +141,9 @@ export default [
         seconds: +mix.duration.toFixed(1), takeSeconds: +take.duration.toFixed(1), channels: mix.numberOfChannels,
         kickOffMs: onset == null ? null : Math.round((onset - kick) * 1000),
         kickNotInTake: rms(take, kick, kick + 0.06) < 0.01,
+        // mastered: at the loudness target, peaks under −1 dB
+        lufs: +FP.mix.loudness([mix.getChannelData(0), mix.getChannelData(1)], mix.sampleRate).toFixed(1),
+        peakDb: +FP.mix.toDb(Math.max(...[0, 1].map((c) => mix.getChannelData(c).reduce((m, x) => Math.max(m, Math.abs(x)), 0)))).toFixed(2),
       };
       return out;
     },
@@ -155,6 +163,10 @@ export default [
       assert.ok(Math.abs(r.mix.seconds - r.mix.takeSeconds) <= 0.5, `mix ${r.mix.seconds}s vs take ${r.mix.takeSeconds}s`);
       assert.ok(r.mix.kickNotInTake, 'the voice-only take is silent where the kick lands');
       assert.ok(r.mix.kickOffMs != null && Math.abs(r.mix.kickOffMs) <= 20, `the kick should start where it was heard (off by ${r.mix.kickOffMs} ms)`);
+      assert.deepEqual(r.mixOpts, { polish: true, target: 'Streaming' });
+      assert.match(r.mixLevel, /^-1[34]\.\d LUFS · peak -1\.\d dB$/);
+      assert.ok(Math.abs(r.mix.lufs - -14) <= 0.6, `mix at ${r.mix.lufs} LUFS`);
+      assert.ok(r.mix.peakDb <= -0.9, `mix peaks at ${r.mix.peakDb} dB`);
     },
   },
 

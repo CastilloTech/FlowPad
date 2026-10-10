@@ -553,31 +553,62 @@ function editorAudio(ed) {
   };
   /**
    * The take mixed with the beat it was recorded over (the song's patterns, or its imported beat),
-   * lined up the way it was heard, rendered offline and saved as a WAV to download or share.
+   * lined up the way it was heard, then mixed and mastered (js/mix.js) and saved as a WAV to
+   * download or share. First: how it's finished.
    */
-  async function exportMix(t) {
-    toast('Mixing your take with the beat…');
+  function exportMix(t) {
+    let target = S.settings.mixTarget || -14;
+    const sh = sheet({
+      title: 'Mix & master',
+      html: `<p class="msg">Your take over the beat, balanced and brought up to a finished loudness.</p>
+        <label class="set-row"><div><div class="lbl">Polish my vocal</div><div class="sub">Rumble and mud out, presence in, an even level, a little room</div></div><input type="checkbox" class="switch" id="mpol" ${S.settings.mixPolish !== false ? 'checked' : ''}></label>
+        <div class="set-row"><div><div class="lbl">Loudness</div><div class="sub">Streaming services play everything at about −14</div></div><div class="seg" id="mtgt">${[[-14, 'Streaming'], [-9, 'Loud']].map(([v, l]) => `<button data-v="${v}" class="${target === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+        <div class="sheet-actions"><button class="btn" data-close>Cancel</button><button class="btn primary" data-a="mgo">Mix it</button></div>`,
+      actions: {
+        mgo: () => {
+          S.settings.mixPolish = $('#mpol', sh.el).checked;
+          S.settings.mixTarget = target;
+          saveSettings();
+          sh.close();
+          runMix(t, S.settings.mixPolish, target);
+        },
+      },
+    });
+    $('#mtgt', sh.el).addEventListener('click', (e) => {
+      const b = e.target.closest('[data-v]');
+      if (!b) return;
+      target = +b.dataset.v;
+      $$('#mtgt button', sh.el).forEach((x) => x.classList.toggle('on', x === b));
+    });
+  }
+  async function runMix(t, polish, target) {
+    toast('Mixing and mastering your take…');
     try {
       let voice = bufs.get(t.id);
       if (!voice) { voice = await audio.decode(t.blob); bufs.set(t.id, voice); }
       const seq = barLines(f), tk = trackReady(), tm = t.timing;
-      const mix = await audio.renderMix({
+      const stems = await audio.renderStems({
         voice,
+        polish,
         steps: tm.log,
         getBar: tk && !f.track.drums ? null : (b) => barSteps(f, seq.length ? seq[b % seq.length] : -1),
         track: tk ? { buffer: tk.buf, offset: tk.rec.offset, bars: tk.rec.bars, rate: tm.bpm / tk.rec.bpm } : null,
         lag: (tm.lat || 0) + 0.02,
         songBpm: tm.bpm,
       });
-      const blob = audio.encodeWav(mix);
+      // the vocal balanced over the beat, then mastered: in a worker, the screen stays smooth
+      const m = await FP.mix.finishOffThread({ beat: stems.beat, vocal: stems.vocal, rate: stems.rate, target, ceilingDb: -1 });
+      const len = m.chans[0].length;
+      const blob = audio.encodeWav({ numberOfChannels: m.chans.length, length: len, sampleRate: stems.rate, getChannelData: (c) => m.chans[c] });
       const name = `${f.title} - ${t.name} (with beat).wav`;
       const file = window.File && new File([blob], name, { type: 'audio/wav' });
       const canShare = navigator.canShare && file && navigator.canShare({ files: [file] });
       const mb = (blob.size / 1048576).toFixed(1);
+      const level = Number.isFinite(m.lufs) ? `${m.lufs.toFixed(1)} LUFS · peak ${m.peakDb.toFixed(1)} dB` : 'Silent';
       // a fresh tap to share or save — the mixing took long enough that the browser wants one
       const sh = sheet({
         title: 'Your mix is ready',
-        html: `<p class="msg">${esc(name)} · ${fmtDur(mix.duration)} · ${mb} MB</p>
+        html: `<p class="msg">${esc(name)} · ${fmtDur(len / stems.rate)} · ${mb} MB<br><span class="mlev">${esc(level)}</span></p>
           <div class="sheet-actions">${canShare ? '<button class="btn" data-a="mshare">Share</button>' : ''}<button class="btn primary" data-a="msave">Download</button></div>`,
         actions: {
           mshare: () => { sh.close(); navigator.share({ files: [file], title: name }).catch(() => {}); },
