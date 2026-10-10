@@ -56,11 +56,15 @@ function editorAudio(ed) {
       toast(/^video\//.test(fl.type) || /\.(mov|mp4|m4v)$/i.test(fl.name) ? 'No sound found in that video. Save its audio as an MP3 or M4A and import that.' : 'That file is silent: no beat to import.');
       return;
     }
-    const named = fl.name.match(/(\d{2,3})\s*bpm/i); // most beat files say their tempo
-    const guess = named ? +named[1] : audio.guessBpm(buf);
-    const b = { id: FP.uid(), name: fl.name.replace(/\.[^.]+$/, '') || 'My beat', blob: fl, mime: fl.type, bpm: clamp(Math.round(guess || f.bpm), 50, 220), offset: 0, bars: 4, duration: buf.duration, created: Date.now() };
+    // the tempo (most beat files say it in their name) and where bar 1 starts — after a video's
+    // quiet first second, say
+    const named = fl.name.match(/(\d{2,3}(?:\.\d)?)\s*bpm/i);
+    let timing = null;
+    try { timing = await FP.mix.offThread('timing', { chans: monoOf(buf), rate: buf.sampleRate, bpm: named ? +named[1] : null }); } catch (e) { console.error(e); }
+    const bpm = clamp((timing && timing.bpm) || (named && +named[1]) || f.bpm, 50, 220);
+    const b = { id: FP.uid(), name: fl.name.replace(/\.[^.]+$/, '') || 'My beat', blob: fl, mime: fl.type, bpm, offset: (timing && timing.offset) || 0, bars: 4, duration: buf.duration, created: Date.now() };
     if (!(await beatSettings(b, true, buf))) return;
-    if (b.bars >= 8) b.sections = findSections(b, buf);
+    if (b.bars >= 8) { toast('Finding the beat’s sections…'); b.sections = await findSections(b, buf); }
     await db.put('beats', b);
     tracks.set(b.id, { rec: b, buf });
     if (f.track && f.track.id !== b.id) await dropBeat(f.track.id);
@@ -77,8 +81,15 @@ function editorAudio(ed) {
   // ----- the imported beat's structure: Intro · Verse · Hook · Outro -----
   const secKind = (name) => (/^(intro|outro)/i.test(name) ? 'edge' : /^(hook|chorus)/i.test(name) ? 'hook' : /^bridge/i.test(name) ? 'bridge' : 'verse');
   const secSummary = (secs) => secs.map((s) => `${s.name} ${s.bars}`).join(' · ');
-  function findSections(b, buf) {
-    try { return FP.structure.detect(audio.barFeatures(buf, b.bpm, b.offset, b.bars)); } catch (e) { return null; }
+  /** A beat's sections (Intro, Verse, Hook…), worked out in the worker. Resolves null if it can't tell. */
+  async function findSections(b, buf) {
+    try { return (await FP.mix.offThread('sections', { chans: monoOf(buf), rate: buf.sampleRate, bpm: b.bpm, offset: b.offset, bars: b.bars })).sections; } catch (e) { console.error(e); return null; }
+  }
+  /** The beat as one channel, a copy (it's handed to the worker). */
+  function monoOf(buf) {
+    const a = buf.getChannelData(0), m = new Float32Array(a.length);
+    if (buf.numberOfChannels > 1) { const c = buf.getChannelData(1); for (let i = 0; i < m.length; i++) m[i] = (a[i] + c[i]) / 2; } else m.set(a);
+    return [m];
   }
   /** Put a label at each of the beat's sections; bar k of the sheet then plays over bar k of the beat. */
   function layOut(secs) {
@@ -97,10 +108,11 @@ function editorAudio(ed) {
       actions: { go: () => { sh.close(); layOut(secs); } },
     });
   }
-  VA.sfind = () => {
+  VA.sfind = async () => {
     const tk = trackReady();
     if (!tk) return;
-    tk.rec.sections = findSections(tk.rec, tk.buf);
+    toast('Finding the beat’s sections…');
+    tk.rec.sections = await findSections(tk.rec, tk.buf);
     db.put('beats', tk.rec);
     PBeat();
     if (tk.rec.sections && tk.rec.sections.length > 1) offerLayout(tk.rec.sections);
@@ -151,7 +163,7 @@ function editorAudio(ed) {
       const x = e.target.closest('[data-x]');
       if (x) { secs.splice(+x.dataset.x, 1); draw(); return; }
       if (e.target.closest('#sadd')) { secs.push({ name: secs.some((s) => /^hook/i.test(s.name)) ? 'Verse' : 'Hook', bars: 8 }); draw(); return; }
-      if (e.target.closest('#sredo')) { secs = findSections(tk.rec, tk.buf) || secs; draw(); return; }
+      if (e.target.closest('#sredo')) { findSections(tk.rec, tk.buf).then((r) => { secs = r || secs; draw(); }); return; }
       const save = e.target.closest('#ssave, #ssavelay');
       if (!save) return;
       secs = secs.filter((s) => s.bars > 0).map((s) => ({ name: s.name.trim() || 'Section', bars: s.bars }));
@@ -180,7 +192,8 @@ function editorAudio(ed) {
       const sh = sheet({
         title: isNew ? 'Your beat' : b.name,
         html: `<form class="beatform">
-          <label class="set-row"><div><div class="lbl">Tempo</div><div class="sub">${isNew ? 'Guessed — check it, or tap along' : 'The beat’s own BPM'}</div></div><span class="mrow"><input class="field num" name="bpm" type="number" inputmode="decimal" min="50" max="220" step="1" value="${b.bpm}"><button type="button" class="btn" data-a="btap">Tap</button></span></label>
+          <div class="set-row"><div><div class="lbl">Tempo</div><div class="sub">${isNew ? 'Guessed — check it, or tap along' : 'The beat’s own BPM'} · a bar is <span id="bbar"></span></div></div><span class="mrow"><input class="field num" name="bpm" type="number" inputmode="decimal" min="50" max="220" step="0.1" value="${b.bpm}" aria-label="Tempo in BPM"><button type="button" class="btn" data-a="btap">Tap</button></span></div>
+          <div class="set-row tfix"><div class="sub">Sounds twice too fast or slow? Verses usually run 16 bars.</div><span class="mrow"><button type="button" class="btn" data-a="bhalf" aria-label="Half the tempo">÷2</button><button type="button" class="btn" data-a="bdouble" aria-label="Double the tempo">×2</button></span></div>
           <label class="set-row"><div><div class="lbl">Bar 1 starts at</div><div class="sub">Seconds into the file — skip an intro or silence</div></div><input class="field num" name="offset" type="number" inputmode="decimal" min="0" step="0.01" value="${b.offset}"></label>
           ${buf ? `<div class="set-row lineup"><div><div class="lbl">Line it up</div><div class="sub">Plays bar 1 on with a click on each beat — nudge until the click sits on the kick</div></div>
             <span class="nudge"><button type="button" class="btn" data-a="bprev" aria-label="Play from bar 1 with clicks">${icon('play', 'sm')}</button><button type="button" class="btn" data-a="bn" data-d="-0.05">−50</button><button type="button" class="btn" data-a="bn" data-d="-0.01">−10</button><button type="button" class="btn" data-a="bn" data-d="0.01">+10</button><button type="button" class="btn" data-a="bn" data-d="0.05">+50</button></span></div>` : ''}
@@ -195,6 +208,8 @@ function editorAudio(ed) {
             sync0();
             if (stopPrev) preview();
           },
+          bhalf: () => { form.elements.bpm.value = Math.round((b.bpm / 2) * 10) / 10; sync0(); },
+          bdouble: () => { form.elements.bpm.value = Math.round(b.bpm * 2 * 10) / 10; sync0(); },
           btap: () => {
             const now = performance.now();
             if (taps.length && now - taps[taps.length - 1] > 2000) taps = [];
@@ -214,10 +229,12 @@ function editorAudio(ed) {
       };
       const sync0 = () => {
         b.bpm = clamp(+form.elements.bpm.value || b.bpm, 50, 220);
+        $('#bbar', sh.el).textContent = `${(240 / b.bpm).toFixed(2)} s`;
         b.offset = Math.max(0, Math.min(b.duration - 0.5, +form.elements.offset.value || 0));
         if (!barsTouched) form.elements.bars.value = autoBars();
       };
       form.elements.bpm.addEventListener('input', sync0);
+      sync0();
       form.elements.offset.addEventListener('input', sync0);
       form.elements.bars.addEventListener('input', () => { barsTouched = true; });
       form.addEventListener('submit', (e) => {
@@ -242,7 +259,7 @@ function editorAudio(ed) {
           if (!(await beatSettings(b, false, tk.buf))) return;
           const moved = b.bpm !== tk.rec.bpm || b.offset !== tk.rec.offset || b.bars !== tk.rec.bars;
           Object.assign(tk.rec, b);
-          if (moved && tk.rec.sections) tk.rec.sections = tk.rec.bars >= 8 ? findSections(tk.rec, tk.buf) : null; // bar lines moved: find the sections again
+          if (moved && tk.rec.sections) tk.rec.sections = tk.rec.bars >= 8 ? await findSections(tk.rec, tk.buf) : null; // bar lines moved: find the sections again
           await db.put('beats', tk.rec);
           setBpm(b.bpm);
           if (T.drums) syncTransport(true);

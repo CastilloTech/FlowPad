@@ -420,51 +420,12 @@
    * How each bar of a beat sounds, for finding its sections: overall loudness, bass (kick/808)
    * and brightness (hats, top end), in dB. Bars are cut from `offset` at the beat's tempo.
    */
-  function barFeatures(buffer, bpm, offset, bars) {
-    const c0 = buffer.getChannelData(0), c1 = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : c0;
-    const rate = buffer.sampleRate, len = (240 / bpm) * rate, out = [];
-    const db = (s, n) => 10 * Math.log10(s / n + 1e-10);
-    const k = 1 - Math.exp((-2 * Math.PI * 150) / (rate / 2)); // ~150 Hz low-pass, reading every other sample
-    let lp = 0, prev = 0;
-    for (let b = 0; b < bars; b++) {
-      const a = Math.floor(offset * rate + b * len), e = Math.min(c0.length, Math.floor(a + len));
-      if (a >= c0.length) break;
-      let s = 0, lo = 0, hi = 0, n = 0;
-      for (let i = a; i < e; i += 2, n++) {
-        const v = (c0[i] + c1[i]) / 2;
-        lp += k * (v - lp);
-        const d = v - prev; prev = v; // first difference: the top end
-        s += v * v; lo += lp * lp; hi += d * d;
-      }
-      out.push({ rms: db(s, n), low: db(lo, n), high: db(hi, n) });
-    }
-    return out;
-  }
-
-  /**
-   * Rough tempo of a beat: autocorrelation of its low-end onset envelope, folded into 70–180 BPM.
-   * Returns null when nothing clear stands out.
-   */
-  function guessBpm(buffer) {
-    const x = buffer.getChannelData(0), rate = buffer.sampleRate, hop = Math.round(rate / 100);
-    const n = Math.min(Math.floor(x.length / hop), 100 * 60); // first minute is plenty
-    const env = new Float32Array(n);
-    let prev = 0, lp = 0;
-    for (let f = 0; f < n; f++) {
-      let s = 0;
-      for (let i = f * hop, e = i + hop; i < e; i++) { lp += 0.05 * (x[i] - lp); s += lp * lp; } // low-pass: kicks
-      const v = Math.log10(s / hop + 1e-9);
-      env[f] = Math.max(0, v - prev); // rises only
-      prev = v;
-    }
-    let best = 0, bestLag = 0;
-    for (let lag = Math.floor(6000 / 180); lag <= Math.ceil(6000 / 70); lag++) {
-      let s = 0;
-      for (let f = lag; f < n; f++) s += env[f] * env[f - lag];
-      if (s > best) { best = s; bestLag = lag; }
-    }
-    return bestLag ? Math.round(6000 / bestLag) : null;
-  }
+  const chansOf = (buffer) => Array.from({ length: Math.min(2, buffer.numberOfChannels) }, (_, c) => buffer.getChannelData(c));
+  /** Each bar's sound, for finding the beat's sections (js/structure.js). */
+  const barFeatures = (buffer, bpm, offset, bars) => FP.structure.features(chansOf(buffer), buffer.sampleRate, bpm, offset, bars);
+  /** The beat's tempo and where its bar 1 starts ({ bpm, offset }); with `bpm` known, just bar 1. */
+  const guessTiming = (buffer, bpm = null) => FP.structure.tempo(chansOf(buffer), buffer.sampleRate, { bpm });
+  const guessBpm = (buffer) => guessTiming(buffer).bpm;
 
   FP.audio = {
     ensure,
@@ -486,6 +447,7 @@
     decode,
     peakOf,
     guessBpm,
+    guessTiming,
     barFeatures,
     /** Play a decoded take at audio-clock time t; returns a stop function. */
     playBuffer(buffer, t, onEnd) {

@@ -490,22 +490,24 @@
   }
 
   /**
-   * A job in a worker, so the screen stays smooth: 'finish' (the mix) or 'denoise' (a take). It runs
+   * A job in a worker, so the screen stays smooth: 'finish' (the mix), 'denoise' (a take), or an
+   * imported beat's 'timing' (tempo, bar 1) or 'sections' (js/structure.js). It runs
    * here instead where workers can't start. Arrays passed in are handed over, not copied: don't use
    * them afterwards.
    */
   function offThread(op, args) {
-    const run = () => (op === 'denoise' ? denoise(args) : finish(args));
+    const run = () => (op === 'denoise' ? denoise(args) : op === 'finish' ? finish(args)
+      : op === 'timing' ? FP.structure.tempo(args.chans, args.rate, { bpm: args.bpm }) : { sections: FP.structure.sections(args) });
     return new Promise((resolve, reject) => {
       let w;
       try { w = new Worker('js/mix-worker.js'); } catch (e) { try { resolve(run()); } catch (x) { reject(x); } return; }
       w.onmessage = (e) => { w.terminate(); if (e.data.error) reject(new Error(e.data.error)); else resolve(e.data); };
       w.onerror = (e) => { w.terminate(); e.preventDefault(); reject(new Error(e.message || 'mix worker failed')); };
-      const arrays = [...(args.vocal || []), ...(args.beat || []), args.rawVoice, args.chan].filter(Boolean);
+      const arrays = [...(args.vocal || []), ...(args.beat || []), ...(args.chans || []), args.rawVoice, args.chan].filter(Boolean);
       w.postMessage({ op, args }, arrays.map((c) => c.buffer).filter((b, i, a) => a.indexOf(b) === i));
     });
   }
   const finishOffThread = (args) => offThread('finish', args);
 
-  FP.mix = { PRESETS, toDb, fromDb, loudness, truePeak, limit, master, ride, eqPlan, applyEq, deEss, duck, denoise, finish, offThread, finishOffThread };
+  FP.mix = { makeFft, PRESETS, toDb, fromDb, loudness, truePeak, limit, master, ride, eqPlan, applyEq, deEss, duck, denoise, finish, offThread, finishOffThread };
 })();

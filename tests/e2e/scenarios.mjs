@@ -298,7 +298,9 @@ export default [
       E2E.dock(/Beat/).click(); await sleep(300);
       const out = { barsBefore: E2E.bars().length };
       E2E.choose(document.querySelector('#tfile'), new File([wav], 'Test Beat 90bpm.wav', { type: 'audio/wav' })); await sleep(2500);
-      document.querySelector('.beatform').requestSubmit(); await sleep(1500);
+      document.querySelector('.beatform').requestSubmit();
+      // the sections are worked out in the background: wait for the offer to lay the song out
+      for (let i = 0; i < 100 && !document.querySelector('.sheet [data-a="go"]'); i++) await sleep(100);
       out.offer = document.querySelector('.sheet .msg')?.textContent;
       document.querySelector('.sheet [data-a="go"]').click(); await sleep(600);
       out.labels = [...document.querySelectorAll('.blk.label')].map((l) => l.textContent).join(' | ');
