@@ -556,48 +556,83 @@ function editorAudio(ed) {
    * lined up the way it was heard, then mixed and mastered (js/mix.js) and saved as a WAV to
    * download or share. First: how it's finished.
    */
+  const VOCALS = [['raw', 'Raw', 'Just balanced and mastered'], ['clean', 'Clean', 'Noise and rumble out, an even level, a little room'], ['radio', 'Radio', 'Brighter, compressed harder, right up front'], ['lofi', 'Lo-fi', 'Darker and narrower, more room']];
   function exportMix(t) {
     let target = S.settings.mixTarget || -14;
+    let vocal = S.settings.mixVocal || (S.settings.mixPolish === false ? 'raw' : 'clean');
+    const sub = () => VOCALS.find(([k]) => k === vocal)[2];
     const sh = sheet({
       title: 'Mix & master',
       html: `<p class="msg">Your take over the beat, balanced and brought up to a finished loudness.</p>
-        <label class="set-row"><div><div class="lbl">Polish my vocal</div><div class="sub">Rumble and mud out, presence in, an even level, a little room</div></div><input type="checkbox" class="switch" id="mpol" ${S.settings.mixPolish !== false ? 'checked' : ''}></label>
+        <div class="set-row col"><div><div class="lbl">Vocal</div><div class="sub" id="mvsub">${esc(sub())}</div></div><div class="seg wide" id="mvoc">${VOCALS.map(([k, l]) => `<button data-v="${k}" class="${vocal === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
         <div class="set-row"><div><div class="lbl">Loudness</div><div class="sub">Streaming services play everything at about −14</div></div><div class="seg" id="mtgt">${[[-14, 'Streaming'], [-9, 'Loud']].map(([v, l]) => `<button data-v="${v}" class="${target === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>
         <div class="sheet-actions"><button class="btn" data-close>Cancel</button><button class="btn primary" data-a="mgo">Mix it</button></div>`,
       actions: {
         mgo: () => {
-          S.settings.mixPolish = $('#mpol', sh.el).checked;
+          S.settings.mixVocal = vocal;
           S.settings.mixTarget = target;
           saveSettings();
           sh.close();
-          runMix(t, S.settings.mixPolish, target);
+          runMix(t, vocal, target);
         },
       },
     });
-    $('#mtgt', sh.el).addEventListener('click', (e) => {
+    const seg = (id, fn) => $(id, sh.el).addEventListener('click', (e) => {
       const b = e.target.closest('[data-v]');
       if (!b) return;
-      target = +b.dataset.v;
-      $$('#mtgt button', sh.el).forEach((x) => x.classList.toggle('on', x === b));
+      fn(b.dataset.v);
+      $$(`${id} button`, sh.el).forEach((x) => x.classList.toggle('on', x === b));
     });
+    seg('#mvoc', (v) => { vocal = v; $('#mvsub', sh.el).textContent = sub(); });
+    seg('#mtgt', (v) => { target = +v; });
   }
-  async function runMix(t, polish, target) {
-    toast('Mixing and mastering your take…');
+  /** What the mix did, in a few short lines. */
+  function mixSaid(r = {}) {
+    const hz = (f) => (f >= 1000 ? `${f / 1000} kHz` : `${f} Hz`), sgn = (d) => `${d > 0 ? '+' : '−'}${Math.abs(d)}`;
+    const out = [];
+    if (r.noise != null && r.noise <= -1) out.push(`Background noise down ${Math.round(-r.noise)} dB`);
+    if (r.eq && r.eq.length) out.push(`${r.preset ? `${r.preset} vocal` : 'Vocal'} tone: ${r.eq.map((m) => `${sgn(m.db)} dB at ${hz(m.hz)}`).join(', ')}`);
+    if (r.ride && r.ride[1] - r.ride[0] >= 1) out.push(`Phrase levels evened out (${sgn(Math.round(r.ride[0]))} to ${sgn(Math.round(r.ride[1]))} dB)`);
+    if (r.deEss != null && r.deEss <= -1) out.push(`Harsh “s” sounds down up to ${Math.round(-r.deEss)} dB`);
+    if (r.duck) out.push(`The beat dips ${r.duck} dB in the middle while you rap`);
+    if (r.short) out.push('Kept a little under the target: any louder would only flatten the hits');
+    return out;
+  }
+  /** Float32Arrays → an AudioBuffer to play. */
+  const toBuffer = (chans, rate) => {
+    const b = audio.ensure().createBuffer(chans.length, chans[0].length, rate);
+    chans.forEach((c, i) => b.copyToChannel(c, i));
+    return b;
+  };
+  async function runMix(t, vocal, target) {
+    const preset = vocal === 'raw' ? null : vocal, P = preset && FP.mix.PRESETS[preset];
+    // a few seconds on a phone for a long take: say so until it's ready
+    const busy = sheet({ title: 'Mixing & mastering…', html: `<p class="msg">${P ? 'Cleaning up and measuring your vocal, balancing it over the beat, then' : 'Balancing your take over the beat, then'} bringing it up to ${target} LUFS. A long take can take a little while.</p><div class="mbar"><i></i></div>` });
     try {
       let voice = bufs.get(t.id);
       if (!voice) { voice = await audio.decode(t.blob); bufs.set(t.id, voice); }
+      // the room's hiss and hum out first (measured in the count-in and the gaps), in the worker
+      let clean = voice, noise = null;
+      if (P) {
+        const dn = await FP.mix.offThread('denoise', { chan: voice.getChannelData(0).slice(), rate: voice.sampleRate });
+        noise = dn.cutDb;
+        if (noise < 0) clean = toBuffer([dn.chan], voice.sampleRate);
+      }
       const seq = barLines(f), tk = trackReady(), tm = t.timing;
       const stems = await audio.renderStems({
-        voice,
-        polish,
+        voice: clean,
+        original: voice,
+        chain: P ? P.chain : null,
         steps: tm.log,
         getBar: tk && !f.track.drums ? null : (b) => barSteps(f, seq.length ? seq[b % seq.length] : -1),
         track: tk ? { buffer: tk.buf, offset: tk.rec.offset, bars: tk.rec.bars, rate: tm.bpm / tk.rec.bpm } : null,
         lag: (tm.lat || 0) + 0.02,
         songBpm: tm.bpm,
       });
+      const beatCopy = stems.beat && stems.beat.map((c) => c.slice()); // the worker gets the stems; the A/B keeps the beat
       // the vocal balanced over the beat, then mastered: in a worker, the screen stays smooth
-      const m = await FP.mix.finishOffThread({ beat: stems.beat, vocal: stems.vocal, rate: stems.rate, target, ceilingDb: -1 });
+      const m = await FP.mix.finishOffThread({ beat: stems.beat, vocal: stems.vocal, rawVoice: stems.raw, rate: stems.rate, target, ceilingDb: -1, preset });
+      m.report.noise = noise;
       const len = m.chans[0].length;
       const blob = audio.encodeWav({ numberOfChannels: m.chans.length, length: len, sampleRate: stems.rate, getChannelData: (c) => m.chans[c] });
       const name = `${f.title} - ${t.name} (with beat).wav`;
@@ -605,20 +640,77 @@ function editorAudio(ed) {
       const canShare = navigator.canShare && file && navigator.canShare({ files: [file] });
       const mb = (blob.size / 1048576).toFixed(1);
       const level = Number.isFinite(m.lufs) ? `${m.lufs.toFixed(1)} LUFS · peak ${m.peakDb.toFixed(1)} dB` : 'Silent';
+      if (Number.isFinite(m.lufs) && m.lufs < target - 0.6) m.report.short = true; // stopped short: louder would only crush it
+      busy.close();
       // a fresh tap to share or save — the mixing took long enough that the browser wants one
+      const ab = abPlayer(toBuffer(m.chans, stems.rate), beatCopy && toBuffer(beatCopy, stems.rate), voice, m.lufs, m.rawLufs);
       const sh = sheet({
         title: 'Your mix is ready',
         html: `<p class="msg">${esc(name)} · ${fmtDur(len / stems.rate)} · ${mb} MB<br><span class="mlev">${esc(level)}</span></p>
+          ${mixSaid(m.report).length ? `<ul class="mrep">${mixSaid(m.report).map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+          <div class="ab"><button class="play" data-a="abplay" aria-label="Play">${icon('play')}</button><div class="seg wide" id="absel"><button data-v="mix" class="on">Mixed</button><button data-v="raw">Original</button></div></div>
+          <p class="src ab-note">Both play at the same loudness, so you hear the mix — not just the volume.</p>
           <div class="sheet-actions">${canShare ? '<button class="btn" data-a="mshare">Share</button>' : ''}<button class="btn primary" data-a="msave">Download</button></div>`,
         actions: {
+          abplay: (b) => { const on = ab.toggle(); b.classList.toggle('on', on); b.innerHTML = icon(on ? 'stop' : 'play'); },
           mshare: () => { sh.close(); navigator.share({ files: [file], title: name }).catch(() => {}); },
           msave: () => { sh.close(); download(name, blob); },
         },
       });
+      $('#absel', sh.el).addEventListener('click', (e) => {
+        const b = e.target.closest('[data-v]');
+        if (!b) return;
+        ab.choose(b.dataset.v);
+        $$('#absel button', sh.el).forEach((x) => x.classList.toggle('on', x === b));
+      });
+      ab.onend = () => { const b = $('[data-a="abplay"]', sh.el); if (b) { b.classList.remove('on'); b.innerHTML = icon('play'); } };
+      sh.onclose = () => ab.stop();
     } catch (e) {
       console.error(e);
+      busy.close();
       toast('Couldn’t mix this take in this browser');
     }
+  }
+  /**
+   * Mixed against original: both start together and play through, and switching just crossfades
+   * which one you hear. The louder of the two is turned down to the other's loudness, so the
+   * difference you hear is the mix itself, not that one is louder.
+   */
+  function abPlayer(mixBuf, beatBuf, voice, mixLufs, rawLufs) {
+    const ctx = audio.ensure();
+    const match = Number.isFinite(mixLufs) && Number.isFinite(rawLufs) ? rawLufs - mixLufs : 0;
+    const level = { mix: FP.mix.fromDb(Math.min(0, match)), raw: FP.mix.fromDb(Math.min(0, -match)) };
+    let srcs = [], gains = null, pick = 'mix';
+    const api = {
+      playing: false,
+      onend: null,
+      toggle() { if (api.playing) api.stop(); else api.play(); return api.playing; },
+      play() {
+        audio.stop();
+        stopPlayer();
+        const t0 = ctx.currentTime + 0.05;
+        gains = { mix: ctx.createGain(), raw: ctx.createGain() };
+        for (const k of ['mix', 'raw']) { gains[k].gain.value = k === pick ? level[k] : 0; gains[k].connect(ctx.destination); }
+        const add = (buf, g) => { const s = ctx.createBufferSource(); s.buffer = buf; s.connect(g); s.start(t0); srcs.push(s); return s; };
+        add(mixBuf, gains.mix).onended = () => { if (api.playing) { api.stop(); if (api.onend) api.onend(); } };
+        if (beatBuf) add(beatBuf, gains.raw);
+        add(voice, gains.raw);
+        api.playing = true;
+      },
+      choose(k) {
+        pick = k;
+        if (!gains) return;
+        const now = ctx.currentTime;
+        for (const x of ['mix', 'raw']) { const g = gains[x].gain; g.cancelScheduledValues(now); g.setValueAtTime(g.value, now); g.linearRampToValueAtTime(x === k ? level[x] : 0, now + 0.03); }
+      },
+      stop() {
+        api.playing = false;
+        srcs.forEach((s) => { s.onended = null; try { s.stop(); } catch (e) { /* not started */ } });
+        srcs = [];
+        if (gains) { gains.mix.disconnect(); gains.raw.disconnect(); gains = null; }
+      },
+    };
+    return api;
   }
 
   VA.tmore = (el) => {

@@ -1,5 +1,5 @@
 /* FlowPad service worker — offline app shell. Bump VERSION when files change. */
-const VERSION = 'flowpad-v16';
+const VERSION = 'flowpad-v18';
 const SHELL = [
   './', 'index.html', 'privacy.html', 'css/styles.css', 'js/db.js', 'js/syllables.js', 'js/words.js', 'js/sheet.js', 'js/structure.js', 'js/cadence.js', 'js/mix.js', 'js/mix-worker.js', 'js/audio.js', 'js/voice.js',
   'js/app/core.js', 'js/app/library.js', 'js/app/versions.js', 'js/app/editor.js', 'js/app/editor-audio.js', 'js/app/metronome.js', 'js/app/boot.js',

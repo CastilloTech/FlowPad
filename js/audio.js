@@ -272,10 +272,12 @@
    */
   /**
    * A take's stems, rendered offline: the beat (drum patterns and / or the imported beat, as heard
-   * while recording) and the vocal — through a polish chain when `polish`. Mixing and mastering them
-   * is js/mix.js. Resolves { beat: [L, R] | null, vocal: [L, R], rate }.
+   * while recording) and the vocal — through the vocal chain when given its settings (`chain`, from
+   * a js/mix.js preset). With `original` (the take as recorded), also that, plain, as `raw` — to
+   * compare with. Mixing and mastering them is js/mix.js.
+   * Resolves { beat: [L, R] | null, vocal: [L, R], raw: Float32Array | null, rate }.
    */
-  async function renderStems({ voice, steps, getBar, track, lag = 0, songBpm, polish = true }) {
+  async function renderStems({ voice, original = null, steps, getBar, track, lag = 0, songBpm, chain = null }) {
     const rate = 44100, OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
     const len = Math.ceil((voice.duration + 0.4) * rate);
     // the beat: drums through the same bus as live, the imported beat on its bar lines
@@ -309,34 +311,40 @@
     const off = new OAC(2, len, rate);
     const vs = off.createBufferSource();
     vs.buffer = voice;
-    if (polish) vocalChain(off, vs, voice).connect(off.destination);
+    if (chain) vocalChain(off, vs, voice, chain).connect(off.destination);
     else vs.connect(off.destination);
     vs.start(0);
     const v = await off.startRendering();
-    return { beat, vocal: [v.getChannelData(0), v.getChannelData(1)], rate };
+    let raw = null;
+    if (original) {
+      const o = new OAC(1, len, rate), os = o.createBufferSource();
+      os.buffer = original;
+      os.connect(o.destination);
+      os.start(0);
+      raw = (await o.startRendering()).getChannelData(0);
+    }
+    return { beat, vocal: [v.getChannelData(0), v.getChannelData(1)], raw, rate };
   }
 
   /**
-   * A fixed vocal chain for a phone or laptop mic: brought to a steady level first (so the
-   * compressor works the same on a quiet or a loud take), low rumble off, a little mud out,
-   * presence and air in, evened out, then a short room around it. Returns its output node.
+   * The vocal chain's fixed part, for a phone or laptop mic: brought to a steady level first (so the
+   * compressor works the same on a quiet or a loud take), low rumble off, evened out, then a short
+   * room around it. Its tone, phrase levels and "s" sounds are then set from measuring it
+   * (js/mix.js). Returns its output node.
    */
-  function vocalChain(c, src, voice) {
+  function vocalChain(c, src, voice, { ratio = 3, threshold = -24, room = 0.14, low = 90, high = 0 } = {}) {
     const lufs = FP.mix ? FP.mix.loudness([voice.getChannelData(0)], voice.sampleRate) : -20;
     const pre = c.createGain();
     pre.gain.value = Number.isFinite(lufs) ? Math.min(FP.mix.fromDb(30), FP.mix.fromDb(-18 - lufs)) : 1;
     const f = (type, freq, gain = 0, Q = 0.707) => { const b = c.createBiquadFilter(); b.type = type; b.frequency.value = freq; b.gain.value = gain; b.Q.value = Q; return b; };
     const comp = c.createDynamicsCompressor();
-    comp.threshold.value = -24; comp.knee.value = 8; comp.ratio.value = 3; comp.attack.value = 0.006; comp.release.value = 0.15;
-    let node = src.connect(pre)
-      .connect(f('highpass', 90))
-      .connect(f('peaking', 320, -3, 1.1))
-      .connect(f('peaking', 3200, 2.5, 0.9))
-      .connect(f('highshelf', 10000, 2.5))
-      .connect(comp);
+    comp.threshold.value = threshold; comp.knee.value = 8; comp.ratio.value = ratio; comp.attack.value = 0.006; comp.release.value = 0.15;
+    let node = src.connect(pre).connect(f('highpass', low));
+    if (high) node = node.connect(f('lowpass', high)); // lo-fi: a narrower, older-sounding voice
+    node = node.connect(comp);
     // the room: a short, dark, stereo tail, mixed in low (20 ms in, so the words stay up front)
     const out = c.createGain(), dry = c.createGain(), wet = c.createGain(), pd = c.createDelay(0.1), verb = c.createConvolver();
-    dry.gain.value = 1; wet.gain.value = 0.14; pd.delayTime.value = 0.02;
+    dry.gain.value = 1; wet.gain.value = room; pd.delayTime.value = 0.02;
     verb.buffer = roomIR(c, 1.1);
     node.connect(dry).connect(out);
     node.connect(pd).connect(f('lowpass', 6500)).connect(verb).connect(wet).connect(out);

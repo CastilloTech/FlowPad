@@ -119,10 +119,17 @@ export default [
       window.download = (name, blob) => { saved = { name, blob }; };
       document.querySelector('.take [data-a="tmore"]').click(); await sleep(300);
       E2E.menu(/Export with the beat/).click(); await sleep(350);
-      out.mixOpts = { polish: document.querySelector('#mpol').checked, target: document.querySelector('#mtgt .on').textContent };
+      out.mixOpts = { vocal: document.querySelector('#mvoc .on').textContent, choices: [...document.querySelectorAll('#mvoc button')].map((b) => b.textContent), target: document.querySelector('#mtgt .on').textContent };
       document.querySelector('.sheet [data-a="mgo"]').click();
       for (let i = 0; i < 100 && !document.querySelector('.sheet [data-a="msave"]'); i++) await sleep(100);
       out.mixLevel = document.querySelector('.sheet .mlev')?.textContent;
+      out.mixSaid = [...document.querySelectorAll('.sheet .mrep li')].map((li) => li.textContent);
+      // mixed against original, at the same loudness
+      document.querySelector('.sheet [data-a="abplay"]').click(); await sleep(300);
+      document.querySelector('#absel [data-v="raw"]').click(); await sleep(150);
+      out.ab = { playing: document.querySelector('.sheet [data-a="abplay"]').classList.contains('on'), picked: document.querySelector('#absel .on').textContent };
+      document.querySelector('.sheet [data-a="abplay"]').click(); await sleep(100);
+      out.ab.stopped = !document.querySelector('.sheet [data-a="abplay"]').classList.contains('on');
       document.querySelector('.sheet [data-a="msave"]').click(); await sleep(200);
       out.mixName = saved && saved.name;
       const ctxA = FP.audio.ensure();
@@ -163,10 +170,14 @@ export default [
       assert.ok(Math.abs(r.mix.seconds - r.mix.takeSeconds) <= 0.5, `mix ${r.mix.seconds}s vs take ${r.mix.takeSeconds}s`);
       assert.ok(r.mix.kickNotInTake, 'the voice-only take is silent where the kick lands');
       assert.ok(r.mix.kickOffMs != null && Math.abs(r.mix.kickOffMs) <= 20, `the kick should start where it was heard (off by ${r.mix.kickOffMs} ms)`);
-      assert.deepEqual(r.mixOpts, { polish: true, target: 'Streaming' });
-      assert.match(r.mixLevel, /^-1[34]\.\d LUFS · peak -1\.\d dB$/);
-      assert.ok(Math.abs(r.mix.lufs - -14) <= 0.6, `mix at ${r.mix.lufs} LUFS`);
+      assert.deepEqual(r.mixOpts, { vocal: 'Clean', choices: ['Raw', 'Clean', 'Radio', 'Lo-fi'], target: 'Streaming' });
+      assert.deepEqual(r.ab, { playing: true, picked: 'Original', stopped: true });
+      // the test take is very spiky (tone bursts over a drum pattern): where reaching −14 would take
+      // crushing it, the mix stops short — and must say so
+      assert.match(r.mixLevel, /^-1[345]\.\d LUFS · peak -1\.\d dB$/);
+      assert.ok(Math.abs(r.mix.lufs - -14) <= 0.6 || r.mixSaid.some((x) => /^Kept a little under the target/.test(x)), `mix at ${r.mix.lufs} LUFS, said ${JSON.stringify(r.mixSaid)}`);
       assert.ok(r.mix.peakDb <= -0.9, `mix peaks at ${r.mix.peakDb} dB`);
+      assert.ok(r.mixSaid.some((x) => /^The beat dips 3 dB/.test(x)), JSON.stringify(r.mixSaid));
     },
   },
 
