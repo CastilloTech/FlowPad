@@ -126,6 +126,7 @@ function Editor(id) {
     tbar.addEventListener('mousedown', (e) => { if (e.target !== inp) e.preventDefault(); });
   }
   const zoom = () => clamp(S.settings.zoom || 1, 0.8, 1.6);
+  let hitsFor = () => null; // the imported beat's drums under a bar (set once the audio side is up)
   gs.style.setProperty('--cz', zoom());
   $('#tips').addEventListener('toggle', (e) => { S.settings.tipsClosed = !e.target.open; saveSettings(); });
   const rows = f.sheet;
@@ -233,9 +234,9 @@ function Editor(id) {
   VA.chains = () => { S.settings.chains = S.settings.chains === false; saveSettings(); paintAll(); $('#chainsb').textContent = S.settings.chains === false ? 'off' : 'on'; };
 
   /** How bar i's stressed syllables sit: between the 8ths (or triplets) and off the kick and snare. */
-  function pocketOf(i, v) {
+  function pocketOf(i, v, n) {
     if (!v.text) return null;
-    const steps = f.track && !f.track.drums ? null : barSteps(f, i);
+    const steps = f.track && !f.track.drums ? hitsFor(n - 1) : barSteps(f, i);
     const kicks = steps && new Set(range(16).filter((x) => ['kick', 'snare', 'clap'].some((t) => steps[t] && steps[t][x])));
     return FP.cadence.pocket(v.cls, kicks);
   }
@@ -295,8 +296,8 @@ function Editor(id) {
   function rowParts(row, i, n, v, color, mk) {
     if (row.type === 'blank') return { kind: 'blank', html: '' };
     if (row.type === 'label') return { kind: 'label', html: esc(row.text) };
-    const beatOff = f.track && !f.track.drums; // an imported beat replaces the drum patterns
-    const steps = beatOff ? null : barSteps(f, i);
+    const beatOff = f.track && !f.track.drums; // an imported beat replaces the drum patterns: its own drums show
+    const steps = beatOff ? hitsFor(n - 1) : barSteps(f, i);
     const N = row.cells.length; // 16, or 12 / 24 for triplets
     // drum hits under step k: any of the 16ths it covers (patterns are always 16 steps)
     const has = (k, ...ts) => {
@@ -305,7 +306,7 @@ function Editor(id) {
       for (let x = a; x < z; x++) if (ts.some((t) => steps[t] && steps[t][x])) return true;
       return false;
     };
-    const pk = S.settings.pocket ? pocketOf(i, v) : null;
+    const pk = S.settings.pocket ? pocketOf(i, v, n) : null;
     const rep = repNow.get(i) || 1;
     // grid, guide, repeated cadence, pocket misses: one quiet chip that explains itself when tapped
     const flags = [];
@@ -1115,7 +1116,7 @@ function Editor(id) {
   /** What a bar's header chip means — each with what to do about it. */
   VA['bar-info'] = (el) => {
     const r = rowOf(el), R = rows[r], N = R.cells.length, v = barView(R.cells);
-    const rep = repNow.get(r) || 1, pk = S.settings.pocket ? pocketOf(r, v) : null;
+    const rep = repNow.get(r) || 1, pk = S.settings.pocket ? pocketOf(r, v, +el.dataset.n) : null;
     const items = [];
     if (N !== 16) items.push(['gtag', GRID_NAMES[N], N === 12 ? '12 steps: every beat split in three, the rolling triplet flow.' : '24 steps: every 8th split in three, for fast stuttering flows.', 'Change the grid', 'rhythm']);
     if (R.guide) items.push(['gtag guide', 'Guide', `${plural(R.guide.length, 'slot')} from a cadence you tapped in. Each word you type lands in the next one.`, 'Clear the guide', 'unguide']);
@@ -1490,7 +1491,8 @@ function Editor(id) {
     get nowCell() { return nowCell; }, set nowCell(v) { nowCell = v; },
     undo: () => undo(), saveFlow: (r) => saveFlow(r), flowDots: (s0, n) => flowDots(s0, n), activate: (r, k) => activate(r, k),
   };
-  const { PBeat, PTakes, syncTransport, updateTransportUI, stopPlayer, finishRec, loadTrack, hearBar, tapCadence } = editorAudio(ed);
+  const { PBeat, PTakes, syncTransport, updateTransportUI, stopPlayer, finishRec, loadTrack, hearBar, tapCadence, hitsFor: beatHits } = editorAudio(ed);
+  hitsFor = beatHits;
 
   // ----- Bank panel -----
   function PBank() {

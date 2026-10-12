@@ -23,11 +23,10 @@ function editorAudio(ed) {
       ? `<div class="trackbox">${icon('rhyme')}<div class="grow"><b>${esc(tk ? tk.rec.name : 'Loading your beat…')}</b><span class="tsub">${tk ? `${tk.rec.bpm} BPM · ${tk.rec.bars}-bar loop${f.bpm !== tk.rec.bpm ? ` · playing at ${f.bpm}` : ''}` : ''}</span></div><label class="mini"><span>Drums</span><input type="checkbox" class="switch" id="tdrums" ${f.track.drums ? 'checked' : ''} aria-label="Play the drum patterns over the beat"></label><button class="icon-btn muted" data-a="tmenu" aria-label="Beat options">${icon('more')}</button></div>`
       : `<button class="btn block" data-a="timport">${icon('upload', 'sm')}Import your beat (MP3, WAV…)</button>`;
     const secs = tk && tk.rec.sections;
-    const structHTML = !tk || tk.rec.bars < 8 ? ''
+    const structHTML = !tk ? '' : timelineHTML(tk) + (tk.rec.bars < 8 ? ''
       : secs && secs.length
-        ? `<div class="struct" id="struct" role="group" aria-label="Beat structure">${secs.map((s, i) => `<button class="sseg" data-a="sjump" data-i="${i}" data-kind="${secKind(s.name)}" style="flex:${s.bars}" title="${esc(s.name)} · ${plural(s.bars, 'bar')}"><b>${esc(s.name)}</b><span>${s.bars}</span></button>`).join('')}</div>
-          <div class="struct-act"><button class="chip sm" data-a="sedit">${icon('edit', 'sm')}Edit structure</button><button class="chip sm" data-a="slayout">${icon('project', 'sm')}Lay out song to match</button></div>`
-        : `<div class="struct-act"><button class="chip sm" data-a="sfind">${icon('sparkle', 'sm')}Find the beat’s structure</button></div>`;
+        ? `<div class="struct-act"><button class="chip sm" data-a="sedit">${icon('edit', 'sm')}Edit structure</button><button class="chip sm" data-a="slayout">${icon('project', 'sm')}Lay out song to match</button></div>`
+        : `<div class="struct-act"><button class="chip sm" data-a="sfind">${icon('sparkle', 'sm')}Find the beat’s structure</button></div>`) + drumsHTML(tk);
     panel.innerHTML = `<div class="ph"><div class="chips scroll grow">${patternsSorted().map((p) => `<button class="chip sm ${p.id === pat.id ? 'on' : ''}" data-a="bpick" data-id="${p.id}">${esc(p.name)}</button>`).join('')}<button class="chip sm ghost" data-a="bnew">${icon('plus', 'sm')}New</button></div><button class="icon-btn muted" data-a="bmore" aria-label="Pattern options">${icon('more')}</button>${closeBtn}</div>
       ${trackHTML}${structHTML}<input type="file" id="tfile" accept="${BEAT_TYPES}" hidden>
       <div class="seq" id="seq">${[0, 1].map((h) => `<div class="half">${TRACKS.map((t) => `<div class="trk"><span class="tl">${t.name}</span>${range(8).map((j) => { const k = h * 8 + j; const on = !!pat.steps[t.id][k]; return `<button class="st ${on ? 'on' : ''} ${k % 4 === 0 ? 'b' : ''}" data-a="step" data-t="${t.id}" data-k="${k}" aria-label="${t.name} step ${k + 1}" aria-pressed="${on}"></button>`; }).join('')}</div>`).join('')}</div>`).join('')}</div>
@@ -43,7 +42,165 @@ function editorAudio(ed) {
     $('#tfile').addEventListener('change', (e) => { const fl = e.target.files[0]; e.target.value = ''; if (fl) importBeat(fl); });
     const td = $('#tdrums');
     if (td) td.addEventListener('change', () => { f.track.drums = td.checked; saveSoon('files', f); paintAll(); if (T.drums) syncTransport(true); });
+    if (tk) { bindTimeline(tk); showSel(); }
   }
+
+  // ---------------- the beat's timeline: see it, pick a part or some bars, play or loop them ----------------
+  let sel = null, looping = false, firstBar = 0; // sel: { from, to } in the beat's bars (to: null = just where to start)
+  const sectionAt = (tk, bar) => {
+    let a = 0;
+    for (const s of tk.rec.sections || []) { if (bar < a + s.bars) return { ...s, from: a, to: a + s.bars }; a += s.bars; }
+    return null;
+  };
+  function timelineHTML(tk) {
+    const N = tk.rec.bars, secs = tk.rec.sections, wave = tk.rec.wave;
+    const ticks = [];
+    for (let b = 0; b < N; b += N > 48 ? 16 : 8) ticks.push(`<span style="left:${(b / N) * 100}%">${b + 1}</span>`);
+    return `<div class="tl" id="tl">
+      ${secs && secs.length ? `<div class="struct" id="struct" role="group" aria-label="Beat structure">${secs.map((s, i) => `<button class="sseg" data-a="tlsec" data-i="${i}" data-kind="${secKind(s.name)}" style="flex:${s.bars}" title="${esc(s.name)} · ${plural(s.bars, 'bar')}"><b>${esc(s.name)}</b><span>${s.bars}</span></button>`).join('')}</div>` : ''}
+      <div class="tl-wave" id="tlw" aria-label="The beat, bar by bar: drag across bars to choose them">${wave ? wave.slice(0, N * 4).map((v) => `<i style="height:${Math.round(10 + v * 90)}%"></i>`).join('') : '<span class="tl-wait">Reading the beat…</span>'}<div class="tl-sel" id="tlsel" hidden></div><div class="tl-head" id="tlhead" hidden></div></div>
+      <div class="tl-ticks">${ticks.join('')}</div>
+    </div>
+    <div class="tl-bar"><span class="tl-cap" id="tlcap"></span><span class="grow"></span><button class="icon-btn muted" data-a="tlclear" id="tlclear" aria-label="Clear the choice" hidden>${icon('x')}</button><button class="chip sm" data-a="tlloop" id="tlloop" aria-pressed="false">${icon('loop', 'sm')}Loop</button><button class="chip sm on" data-a="tlplay" id="tlplay">${icon(T.drums ? 'stop' : 'play', 'sm')}${T.drums ? 'Stop' : 'Play'}</button></div>`;
+  }
+  /** Drag across the timeline to choose bars; tap it to choose where to start. */
+  function bindTimeline(tk) {
+    const w = $('#tlw');
+    if (!w) return;
+    const barAt = (x) => { const r = w.getBoundingClientRect(); return clamp(Math.floor(((x - r.left) / r.width) * tk.rec.bars), 0, tk.rec.bars - 1); };
+    let down = null;
+    w.addEventListener('pointerdown', (e) => {
+      down = { x: e.clientX, b: barAt(e.clientX), moved: false };
+      try { w.setPointerCapture(e.pointerId); } catch (x) { /* keeps working without it */ }
+    });
+    w.addEventListener('pointermove', (e) => {
+      if (!down) return;
+      if (Math.abs(e.clientX - down.x) > 6) down.moved = true;
+      if (down.moved) { const b = barAt(e.clientX); setSel({ from: Math.min(down.b, b), to: Math.max(down.b, b) + 1 }); }
+    });
+    w.addEventListener('pointerup', (e) => {
+      if (!down) return;
+      if (!down.moved) setSel({ from: barAt(e.clientX), to: null });
+      down = null;
+    });
+    w.addEventListener('pointercancel', () => { down = null; });
+  }
+  function setSel(s) {
+    sel = s;
+    if (!sel || sel.to == null) looping = false;
+    showSel();
+    if (T.drums) syncTransport(true); // playing: carry on from the new choice
+  }
+  /** The choice on the timeline, in words, and the buttons that go with it. */
+  function showSel() {
+    const tk = trackReady(), box = $('#tlsel'), cap = $('#tlcap');
+    if (!tk || !box) return;
+    const N = tk.rec.bars;
+    box.hidden = !sel;
+    if (sel) {
+      box.style.left = `${(sel.from / N) * 100}%`;
+      box.style.width = sel.to == null ? '2px' : `${((sel.to - sel.from) / N) * 100}%`;
+      box.classList.toggle('point', sel.to == null);
+      box.classList.toggle('looping', looping);
+    }
+    const sec = sel && sel.to != null && (tk.rec.sections || []).find((x, i, all) => { const a = all.slice(0, i).reduce((t, y) => t + y.bars, 0); return a === sel.from && a + x.bars === sel.to; });
+    cap.textContent = !sel ? 'Tap the beat to start there, or drag across bars to choose them'
+      : sel.to == null ? `From bar ${sel.from + 1}`
+        : `${sec ? `${sec.name} · ` : ''}bars ${sel.from + 1}–${sel.to}`;
+    const lp = $('#tlloop');
+    lp.disabled = !sel || sel.to == null;
+    lp.classList.toggle('on', looping);
+    lp.setAttribute('aria-pressed', String(looping));
+    $('#tlclear').hidden = !sel;
+    $$('#struct .sseg').forEach((b, i) => {
+      const a = (tk.rec.sections || []).slice(0, i).reduce((t, y) => t + y.bars, 0);
+      b.classList.toggle('picked', !!sel && sel.to != null && a === sel.from && a + tk.rec.sections[i].bars === sel.to);
+    });
+    updateTransportUI();
+  }
+  VA.tlsec = (el) => {
+    const tk = trackReady();
+    if (!tk) return;
+    const i = +el.dataset.i, from = tk.rec.sections.slice(0, i).reduce((a, s) => a + s.bars, 0);
+    setSel({ from, to: from + tk.rec.sections[i].bars });
+    // and on the sheet, if the song's laid out to match
+    const ri = barLines(f)[from], b = ri != null && blkEl(ri);
+    if (b) b.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  };
+  VA.tlloop = () => { if (!sel || sel.to == null) return; looping = !looping; showSel(); if (T.drums) syncTransport(true); };
+  VA.tlclear = () => setSel(null);
+  VA.tlplay = () => { stopPlayer(); T.drums = !T.drums; autoDrums = false; syncTransport(true); };
+  /** The playhead on the timeline: bar b, step k of the beat. */
+  function moveHead(b, k) {
+    const tk = trackReady(), h = $('#tlhead');
+    if (!tk || !h) return;
+    h.hidden = false;
+    h.style.left = `${(((b % tk.rec.bars) + k / 16) / tk.rec.bars) * 100}%`;
+  }
+
+  // ---------------- the beat's own drums: on the sheet, and as a pattern to keep ----------------
+  const parsed = new Map();
+  /** The drums of the beat under sheet bar n (0-based), as steps per drum — or null. */
+  function hitsFor(n) {
+    const tk = trackReady(), h = tk && tk.rec.hits;
+    if (!h || !h.length) return null;
+    const i = n % tk.rec.bars, key = `${tk.rec.id}:${i}`;
+    if (!parsed.has(key)) { const x = h[i] || {}; const arr = (s) => Array.from(s || '', Number); parsed.set(key, { kick: arr(x.kick), snare: arr(x.snare), hat: arr(x.hat), clap: [], open: [] }); }
+    return parsed.get(key);
+  }
+  /** Listen for the drums (and the outline the timeline draws) in the worker, once per beat and timing. */
+  async function readDrums(tk) {
+    if (!tk || (tk.rec.hits && tk.rec.wave) || tk.reading) return;
+    tk.reading = true;
+    try {
+      const r = await FP.mix.offThread('drums', { chans: monoOf(tk.buf), rate: tk.buf.sampleRate, bpm: tk.rec.bpm, offset: tk.rec.offset, bars: tk.rec.bars });
+      tk.rec.hits = r.hits;
+      tk.rec.wave = r.wave;
+      parsed.clear();
+      await db.put('beats', tk.rec);
+      if (!ed.gone) { paintAll(); if (S.panel === 'beat') PBeat(); }
+    } catch (e) { console.error(e); } finally { tk.reading = false; }
+  }
+  /**
+   * The beat's typical pattern over bars [a, z): for each drum, the steps it hits at least half as
+   * often as its most usual step (and in 15% of the bars) — a kick that moves from bar to bar, as
+   * phonk's does, still shows where it mostly lands.
+   */
+  function typical(tk, a, z) {
+    const out = {}, n = Math.max(1, z - a);
+    for (const k of ['kick', 'snare', 'hat']) {
+      const counts = range(16).map((s) => { let c = 0; for (let b = a; b < z; b++) if ((tk.rec.hits[b] || {})[k]?.[s] === '1') c++; return c; });
+      const most = Math.max(...counts);
+      out[k] = counts.map((c) => (c > 0 && c * 2 >= most && c >= 0.15 * n ? 1 : 0));
+    }
+    return out;
+  }
+  let drumsPick = -1; // -1: the whole beat; else a section
+  function drumsHTML(tk) {
+    if (!tk.rec.hits) return '';
+    const secs = tk.rec.sections || [], pick = drumsPick >= 0 ? secs[drumsPick] : null;
+    const from = pick ? secs.slice(0, drumsPick).reduce((t, s) => t + s.bars, 0) : 0;
+    const p = typical(tk, from, pick ? from + pick.bars : tk.rec.bars);
+    const row = (k, l) => `<div class="xd-row"><span class="tl">${l}</span>${p[k].map((v, s) => `<i class="${v ? 'on' : ''}${s % 4 === 0 ? ' b' : ''}"></i>`).join('')}</div>`;
+    return `<div class="xd"><div class="xd-h"><b>Drums in this beat</b>${secs.length ? `<div class="chips scroll" id="xdsec"><button class="chip sm ${drumsPick < 0 ? 'on' : ''}" data-a="xdpick" data-i="-1">Whole beat</button>${secs.map((s, i) => `<button class="chip sm ${drumsPick === i ? 'on' : ''}" data-a="xdpick" data-i="${i}">${esc(s.name)}</button>`).join('')}</div>` : ''}</div>
+      <div class="xd-grid">${row('kick', 'Kick')}${row('snare', 'Snare')}${row('hat', 'Hats')}</div>
+      <p class="src">Heard in the beat — and shown under every bar of the sheet. Save it to play it, change it, or use it on other songs.</p>
+      <button class="btn block" data-a="xdsave">${icon('drum', 'sm')}Save as a drum pattern</button></div>`;
+  }
+  VA.xdpick = (el) => { drumsPick = +el.dataset.i; PBeat(); };
+  VA.xdsave = async () => {
+    const tk = trackReady();
+    if (!tk || !tk.rec.hits) return;
+    const secs = tk.rec.sections || [], s = drumsPick >= 0 ? secs[drumsPick] : null;
+    const from = s ? secs.slice(0, drumsPick).reduce((t, x) => t + x.bars, 0) : 0, p = typical(tk, from, s ? from + s.bars : tk.rec.bars);
+    const name = await ask({ title: 'Name this pattern', value: `${tk.rec.name.slice(0, 24)}${s ? ` · ${s.name}` : ''}`, ok: 'Save' });
+    if (!name) return;
+    const now = Date.now(), pat = { id: FP.uid(), name, bpm: Math.round(tk.rec.bpm), order: S.patterns.length, created: now, updated: now, steps: { kick: p.kick, snare: p.snare, clap: new Array(16).fill(0), hat: p.hat, open: new Array(16).fill(0) } };
+    S.patterns.push(pat);
+    await db.put('patterns', pat);
+    toast('Saved — pick it above, or turn on Drums to hear it with the beat');
+    PBeat();
+  };
 
   VA.timport = () => $('#tfile').click();
   async function importBeat(fl) {
@@ -67,6 +224,8 @@ function editorAudio(ed) {
     if (b.bars >= 8) { toast('Finding the beat’s sections…'); b.sections = await findSections(b, buf); }
     await db.put('beats', b);
     tracks.set(b.id, { rec: b, buf });
+    sel = null; looping = false;
+    readDrums(tracks.get(b.id)); // in the background: the timeline and the drums fill in
     if (f.track && f.track.id !== b.id) await dropBeat(f.track.id);
     f.track = { id: b.id, drums: false };
     setBpm(b.bpm);
@@ -260,6 +419,7 @@ function editorAudio(ed) {
           const moved = b.bpm !== tk.rec.bpm || b.offset !== tk.rec.offset || b.bars !== tk.rec.bars;
           Object.assign(tk.rec, b);
           if (moved && tk.rec.sections) tk.rec.sections = tk.rec.bars >= 8 ? await findSections(tk.rec, tk.buf) : null; // bar lines moved: find the sections again
+          if (moved) { delete tk.rec.hits; delete tk.rec.wave; sel = null; looping = false; readDrums(tk); } // and its drums
           await db.put('beats', tk.rec);
           setBpm(b.bpm);
           if (T.drums) syncTransport(true);
@@ -384,7 +544,7 @@ function editorAudio(ed) {
     // enough to play it back in time with the beat, or write its words again later
     const timing = {
       log: clock.log.filter((e) => e.t >= r.t0 - 1 && e.t <= r.t0 + r.duration + 1).map((e) => ({ ...e, t: +(e.t - r.t0).toFixed(4) })),
-      bpm: clock.bpm, drums: clock.drums, lat: clock.lat,
+      bpm: clock.bpm, drums: clock.drums, lat: clock.lat, first: firstBar,
     };
     const all = await db.byIndex('recordings', 'fileId', f.id);
     const take = { id: FP.uid(), fileId: f.id, name: `Take ${all.length + 1}`, blob: r.blob, mime: r.mime, duration: r.duration, created: Date.now(), timing };
@@ -557,7 +717,7 @@ function editorAudio(ed) {
     const tm = t.timing;
     // restart the beat from the first bar line inside the take, on the same clock
     const first = tm && tm.drums && tm.log.find((e) => e.t >= 0 && e.step === 0);
-    if (first) audio.play({ ...transportCfg(true), kind: 'take', click: false, startAt: T0 + first.t, startBar: first.bar, onStep: null, onStop: null });
+    if (first) audio.play({ ...transportCfg(true, { from: first.bar }), kind: 'take', click: false, startAt: T0 + first.t, startBar: first.bar, onStep: null, onStop: null });
     const ords = barLines(f);
     const follow = () => {
       if (playingId !== t.id) return;
@@ -654,7 +814,8 @@ function editorAudio(ed) {
         chain: P ? P.chain : null,
         steps: tm.log,
         getBar: tk && !f.track.drums ? null : (b) => barSteps(f, seq.length ? seq[b % seq.length] : -1),
-        track: tk ? { buffer: tk.buf, offset: tk.rec.offset, bars: tk.rec.bars, rate: tm.bpm / tk.rec.bpm } : null,
+        track: tk ? { buffer: tk.buf, offset: tk.rec.offset, bars: tk.rec.bars, bpm: tk.rec.bpm, rate: tm.bpm / tk.rec.bpm } : null,
+        firstBar: tm.first || 0,
         lag: (tm.lat || 0) + 0.02,
         songBpm: tm.bpm,
       });
@@ -794,6 +955,8 @@ function editorAudio(ed) {
     $$('.blk.pa, .blk.pb').forEach((x) => x.classList.remove('pa', 'pb'));
     $$('#seq .st.ph').forEach((x) => x.classList.remove('ph'));
     $$('#struct .sseg.on').forEach((x) => x.classList.remove('on'));
+    const th = $('#tlhead');
+    if (th) th.hidden = true;
     $$('#mb i').forEach((x) => x.classList.remove('on'));
   }
   /** Light up step k of sheet row `line` (the playhead). */
@@ -812,12 +975,13 @@ function editorAudio(ed) {
     ed.nowCell = cell;
   }
   function onTick(b, k) {
-    if (b < 0) {
+    if (b < firstBar) {
       // count-in: the Rec button counts the beats down
       if (counting && k % 4 === 0) { const l = $('#rlabel'); if (l) l.textContent = String(4 - k / 4); }
       return;
     }
     if (counting) counting = false;
+    if (T.drums && S.panel === 'beat') moveHead(b, k);
     if (T.drums) {
       const seq = barLines(f), line = seq.length ? seq[b % seq.length] : -1;
       showStep(line, line >= 0 && rows[line] ? Math.floor((k * rows[line].cells.length) / 16) : k);
@@ -841,16 +1005,25 @@ function editorAudio(ed) {
     }
   }
   /** The song's transport: drum patterns per bar, plus the imported beat looping on bar lines. */
-  function transportCfg(drums) {
+  function transportCfg(drums, { from = 0, loop = null } = {}) {
     const { n, spb } = sig();
     const tk = drums && trackReady();
+    // the imported beat: started at whichever bar the transport is on — from a chosen bar, after a
+    // loop goes round — at that bar's place in the file, and on its bar 1 each time round
+    let beatUntil = -1, beatLast = -2;
+    const beatAt = tk && ((b, t) => {
+      if (b < from) return; // the count-in
+      if (b === beatLast + 1 && b < beatUntil) { beatLast = b; return; }
+      const pos = ((b % tk.rec.bars) + tk.rec.bars) % tk.rec.bars, end = loop ? Math.min(loop.to, tk.rec.bars) : tk.rec.bars, nb = Math.max(1, end - pos);
+      audio.loopAt(t, { buffer: tk.buf, offset: tk.rec.offset + (pos * 240) / tk.rec.bpm, bars: nb, bpm: f.bpm, rate: f.bpm / tk.rec.bpm });
+      beatUntil = b + nb; beatLast = b;
+    });
     return {
       kind: 'song', bpm: f.bpm, swing: drums ? f.swing : 0, click: T.click, accent: S.settings.accent,
+      startBar: from, bars: loop ? loop.to : null, loop: !!loop, loopFrom: loop ? loop.from : 0,
       stepsPerBeat: drums ? 4 : spb, stepsPerBar: drums ? 16 : n * spb,
       getBar: drums && !(tk && !f.track.drums) ? (b) => { const seq = barLines(f); return barSteps(f, seq.length ? seq[b % seq.length] : -1); } : null,
-      beat: tk ? (b, k, t) => {
-        if (k === 0 && b % tk.rec.bars === 0) audio.loopAt(t, { buffer: tk.buf, offset: tk.rec.offset, bars: tk.rec.bars, bpm: f.bpm, rate: f.bpm / tk.rec.bpm });
-      } : null,
+      beat: beatAt ? (b, k, t) => { if (k === 0) beatAt(b, t); } : null,
       words: drums ? (b, t, barDur) => {
         if (!S.settings.hearWords) return;
         const seq = barLines(f);
@@ -959,9 +1132,14 @@ function editorAudio(ed) {
     sh.onclose = () => { if (running) { running = false; audio.stop(); } };
   }
   function startTransport(countIn = 0) {
-    const cfg = transportCfg(T.drums);
+    // from the timeline's choice: where to start, and a stretch to go round (not while recording)
+    const tk = trackReady(), from = tk && sel ? sel.from : 0;
+    const loop = tk && sel && sel.to != null && looping && !recOn ? { from: sel.from, to: sel.to } : null;
+    firstBar = from;
+    const cfg = transportCfg(T.drums, { from, loop });
     E.spb = cfg.stepsPerBeat;
     audio.play({ ...cfg, countIn });
+    showSel();
   }
   /** Apply T to the audio engine. restart = the bar structure changed. */
   function syncTransport(restart, countIn) {
@@ -980,6 +1158,7 @@ function editorAudio(ed) {
     const rec0 = await db.get('beats', f.track.id);
     if (!rec0) { delete f.track; saveSoon('files', f); return; }
     try { tracks.set(rec0.id, { rec: rec0, buf: await audio.decode(rec0.blob) }); } catch (e) { toast('Couldn’t load this song’s beat'); }
+    readDrums(tracks.get(rec0.id)); // beats from before drums were read
     if (!ed.gone) { paintAll(); if (S.panel === 'beat') PBeat(); }
   }
   function updateTransportUI() {
@@ -987,7 +1166,9 @@ function editorAudio(ed) {
     if (pb) {
       pb.classList.toggle('on', T.drums);
       pb.querySelector('.dk-ic').innerHTML = icon(T.drums ? 'stop' : 'play');
-      pb.querySelector('.dk-l').textContent = T.drums ? 'Stop' : 'Play';
+      pb.querySelector('.dk-l').textContent = T.drums ? 'Stop' : looping && sel ? 'Loop' : 'Play';
+      const tp = $('#tlplay');
+      if (tp) tp.innerHTML = `${icon(T.drums ? 'stop' : 'play', 'sm')}${T.drums ? 'Stop' : 'Play'}`;
       pb.setAttribute('aria-label', T.drums ? 'Stop beat' : 'Play beat');
     }
     const mb = $('.metro-btn');
@@ -1004,5 +1185,5 @@ function editorAudio(ed) {
     syncTransport(true);
   };
 
-  return { PBeat, PTakes, syncTransport, updateTransportUI, stopPlayer, finishRec, loadTrack, hearBar, tapCadence };
+  return { PBeat, PTakes, syncTransport, updateTransportUI, stopPlayer, finishRec, loadTrack, hearBar, tapCadence, hitsFor };
 }

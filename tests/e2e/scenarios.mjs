@@ -240,7 +240,10 @@ export default [
       form.querySelector('[data-a="bprev"]').click(); // stop
       form.requestSubmit(); await sleep(600);
       out.trackbox = document.querySelector('.trackbox .tsub')?.textContent;
-      out.dotsUnderBeat = document.querySelectorAll('.cell .dr i').length;
+      // the beat's own drums under the bars, once they've been heard (in the background)
+      for (let i = 0; i < 60 && !document.querySelector('.cell .dr .k'); i++) await sleep(100);
+      out.beatKicks = [...E2E.bars()[0].querySelectorAll('.cell')].map((c, k) => (c.querySelector('.dr .k') ? k : -1)).filter((k) => k >= 0);
+      out.beatOther = document.querySelectorAll('.cell .dr .s, .cell .dr .h').length;
       document.querySelector('#dplay').click(); await sleep(1200);
       out.playing = FP.audio.state().playing;
       document.querySelector('#dplay').click(); await sleep(200);
@@ -257,7 +260,8 @@ export default [
       assert.deepEqual(r.form, { bpm: '90', bars: '4' });
       assert.equal(r.nudged, '0.02');
       assert.equal(r.trackbox, '90 BPM · 4-bar loop');
-      assert.equal(r.dotsUnderBeat, 0);
+      assert.deepEqual(r.beatKicks, [0, 4, 8, 12], 'a kick on every beat, heard in the beat');
+      assert.equal(r.beatOther, 0, 'and nothing else: the beat is only kicks');
       assert.equal(r.playing, true);
       assert.equal(r.dotsWithDrums, r.dotsBefore);
       assert.ok(r.removed);
@@ -316,6 +320,72 @@ export default [
       assert.equal(r.bars, 40);
       assert.equal(r.firstLyric, 'Late night, pen');
       assert.equal(r.undoBars, r.barsBefore);
+    },
+  },
+
+  {
+    name: 'timeline: the beat in parts, pick one or drag across bars, loop it; its drums saved as a pattern',
+    audio: true,
+    async run() {
+      const { sleep } = E2E;
+      if (!(await E2E.audioRuns())) return { skipped: 'audio clock does not run here' };
+      document.querySelector('.row').click(); await sleep(500);
+      // 24 bars at 120: 8 of kick + hats, 8 with a snare added, 8 like the first
+      const bar = 240 / 120, rate = 22050, off = new OfflineAudioContext(1, Math.ceil(24 * bar * rate), rate);
+      const hit = (type, freq, t, len, gain, f2) => { const o = off.createOscillator(), g = off.createGain(); o.type = type; o.frequency.setValueAtTime(freq, t); if (f2) o.frequency.exponentialRampToValueAtTime(f2, t + 0.12); g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0005, t + len); o.connect(g).connect(off.destination); o.start(t); o.stop(t + len + 0.02); };
+      for (let b = 0; b < 24; b++) {
+        const t = b * bar;
+        for (const q of [0, 2]) hit('sine', 110, t + q * bar / 4, 0.3, 0.8, 45);
+        for (let e = 0; e < 8; e++) hit('square', 7000, t + (e * bar) / 8, 0.03, 0.05);
+        if (b >= 8 && b < 16) for (const q of [1, 3]) { hit('triangle', 210, t + (q * bar) / 4, 0.15, 0.35); hit('sawtooth', 1800, t + (q * bar) / 4, 0.1, 0.25); }
+      }
+      const wav = E2E.wav((await off.startRendering()).getChannelData(0), rate);
+      E2E.dock(/Beat/).click(); await sleep(300);
+      E2E.choose(document.querySelector('#tfile'), new File([wav], 'Parts 120bpm.wav', { type: 'audio/wav' })); await sleep(2000);
+      document.querySelector('.beatform').requestSubmit();
+      for (let i = 0; i < 100 && !document.querySelector('.sheet [data-a="go"]'); i++) await sleep(100);
+      document.querySelector('.sheet [data-a="go"]')?.click(); await sleep(500);
+      if (!document.querySelector('#panel .tl-wave i')) { E2E.dock(/Beat/).click(); await sleep(300); E2E.dock(/Beat/).click(); await sleep(300); }
+      for (let i = 0; i < 80 && !document.querySelector('#panel .tl-wave i'); i++) await sleep(100);
+      const out = { bars: document.querySelectorAll('#tlw i').length / 4, parts: [...document.querySelectorAll('#struct .sseg b')].map((b) => b.textContent) };
+      // pick the middle part
+      document.querySelectorAll('#struct .sseg')[1]?.click(); await sleep(200);
+      out.picked = document.querySelector('#tlcap').textContent;
+      // drag across bars 13–14 instead, loop them, play: it goes round those two bars
+      const w = document.querySelector('#tlw'), r = w.getBoundingClientRect(), x = (b) => r.left + ((b + 0.5) / 24) * r.width;
+      const ev = (type, b) => w.dispatchEvent(new PointerEvent(type, { bubbles: true, clientX: x(b), clientY: r.top + 10, pointerId: 1 }));
+      ev('pointerdown', 12); ev('pointermove', 12.6); ev('pointermove', 13); ev('pointerup', 13); await sleep(150);
+      out.dragged = document.querySelector('#tlcap').textContent;
+      document.querySelector('[data-a="tlloop"]').click(); await sleep(100);
+      out.dock = document.querySelector('#dplay .dk-l').textContent;
+      document.querySelector('[data-a="tlplay"]').click(); await sleep(5600);
+      const bars = [...new Set(FP.audio.timeline().log.filter((e) => e.bar >= 0 && e.step === 0).map((e) => e.bar))];
+      out.played = bars;
+      out.head = !document.querySelector('#tlhead').hidden;
+      document.querySelector('[data-a="tlplay"]').click(); await sleep(200);
+      // the drums heard in the middle part, kept as a pattern
+      const before = S.patterns.length;
+      [...document.querySelectorAll('#xdsec .chip')][2]?.click(); await sleep(200);
+      out.snareRow = [...document.querySelectorAll('.xd-row')][1].querySelectorAll('i.on').length;
+      document.querySelector('[data-a="xdsave"]').click(); await sleep(300);
+      document.querySelector('.sheet form').requestSubmit(); await sleep(400);
+      out.saved = S.patterns.length - before;
+      const p = S.patterns[S.patterns.length - 1];
+      out.pattern = { kick: p.steps.kick.join(''), snare: p.steps.snare.join('') };
+      return out;
+    },
+    check(r, assert) {
+      assert.equal(r.bars, 24);
+      assert.equal(r.parts.length, 3, JSON.stringify(r.parts));
+      assert.match(r.picked, /bars 9–16$/);
+      assert.equal(r.dragged, 'bars 13–14');
+      assert.equal(r.dock, 'Loop');
+      assert.deepEqual(r.played, [12, 13], `it should go round bars 13–14, played ${r.played}`);
+      assert.ok(r.head);
+      assert.ok(r.snareRow >= 2, 'the middle part has a snare on 2 and 4');
+      assert.equal(r.saved, 1);
+      assert.equal(r.pattern.kick, '1000000010000000');
+      assert.equal(r.pattern.snare, '0000100000001000');
     },
   },
 

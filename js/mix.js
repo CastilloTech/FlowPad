@@ -516,7 +516,7 @@
    */
   function offThread(op, args) {
     const run = () => (op === 'denoise' ? denoise(args) : op === 'finish' ? finish(args)
-      : op === 'timing' ? FP.structure.tempo(args.chans, args.rate, { bpm: args.bpm }) : { sections: FP.structure.sections(args) });
+      : op === 'timing' ? FP.structure.tempo(args.chans, args.rate, { bpm: args.bpm }) : op === 'drums' ? FP.structure.drums(args) : { sections: FP.structure.sections(args) });
     return new Promise((resolve, reject) => {
       let w;
       try { w = new Worker('js/mix-worker.js'); } catch (e) { try { resolve(run()); } catch (x) { reject(x); } return; }
@@ -528,5 +528,5 @@
   }
   const finishOffThread = (args) => offThread('finish', args);
 
-  FP.mix = { makeFft, PRESETS, toDb, fromDb, loudness, truePeak, limit, master, ride, eqPlan, applyEq, deEss, duck, denoise, finish, offThread, finishOffThread };
+  FP.mix = { makeFft, rbj, biquad, PRESETS, toDb, fromDb, loudness, truePeak, limit, master, ride, eqPlan, applyEq, deEss, duck, denoise, finish, offThread, finishOffThread };
 })();

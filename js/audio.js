@@ -159,8 +159,8 @@
     tr.log.push({ t, bar, step, n: c.stepsPerBar });
     if (tr.log.length > 40000) tr.log.splice(0, 10000);
     if (c.onStep) tr.queue.push({ t, bar, step });
-    if (bar < 0) {
-      // count-in bars (numbered -1, -2 …): clicks on the beats only
+    if (bar < (c.startBar || 0)) {
+      // count-in bars (the ones before where it starts): clicks on the beats only
       if (step % c.stepsPerBeat === 0) voices.click(t, step === 0);
       return;
     }
@@ -206,7 +206,7 @@
         tr.step = 0;
         tr.bar++;
         if (c.bars != null && tr.bar >= c.bars) {
-          if (c.loop) tr.bar = 0;
+          if (c.loop) tr.bar = c.loopFrom || 0; // back to the loop's start
           else {
             tr.ending = true;
             const wait = (tr.next - ctx.currentTime) * 1000;
@@ -219,14 +219,16 @@
   }
 
   /**
-   * cfg: { kind, bpm, swing, stepsPerBeat, stepsPerBar, bars (null = endless), loop,
+   * cfg: { kind, bpm, swing, stepsPerBeat, stepsPerBar, startBar, countIn, bars (null = endless; the
+   *        bar to stop or loop at), loop, loopFrom (the bar a loop goes back to),
    *        click, accent, getBar(barIndex) -> steps|null, onStep(bar, step), onStop() }
    */
   function play(cfg) {
     ensure();
     stop();
     tr.cfg = Object.assign({ stepsPerBeat: 4, stepsPerBar: 16, bars: null, swing: 0 }, cfg);
-    tr.bar = cfg.startBar != null ? cfg.startBar : -(cfg.countIn || 0); tr.step = 0; tr.ending = false;
+    // from bar `startBar` (0 by default), with `countIn` bars of clicks before it
+    tr.bar = (cfg.startBar || 0) - (cfg.countIn || 0); tr.step = 0; tr.ending = false;
     tr.log = []; tr.bpm = tr.cfg.bpm;
     tr.next = cfg.startAt && cfg.startAt > ctx.currentTime ? cfg.startAt : ctx.currentTime + 0.08;
     tr.queue = [];
@@ -286,7 +288,7 @@
    * compare with. Mixing and mastering them is js/mix.js.
    * Resolves { beat: [L, R] | null, vocal: [L, R], raw: Float32Array | null, rate }.
    */
-  async function renderStems({ voice, original = null, steps, getBar, track, lag = 0, songBpm, chain = null }) {
+  async function renderStems({ voice, original = null, steps, getBar, track, lag = 0, songBpm, chain = null, firstBar = 0 }) {
     const rate = 44100, OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
     const len = Math.ceil((voice.duration + 0.4) * rate);
     // the beat: drums through the same bus as live, the imported beat on its bar lines
@@ -298,19 +300,23 @@
       bus.connect(comp).connect(off.destination);
       const kit = makeVoices(off, bus, makeNoise(off));
       const end = voice.duration;
+      let beatOn = false;
       for (const s of steps) {
         const t = s.t + lag;
-        if (s.bar < 0 || t < 0 || t > end) continue; // no count-in clicks in the mix
+        if (s.bar < firstBar || t < 0 || t > end) continue; // no count-in clicks in the mix
         const pat = getBar ? getBar(s.bar) : null;
         if (pat) for (const k of ['kick', 'snare', 'clap', 'hat', 'open']) { const v = pat[k] && pat[k][s.step]; if (v) kit[k](t, v > 1 ? 1.25 : 1); }
-        if (track && s.step === 0 && s.bar % track.bars === 0) {
+        // the imported beat, from the right place in it: where the take starts, and on its bar 1 after
+        if (track && s.step === 0 && (s.bar % track.bars === 0 || !beatOn)) {
+          const pos = ((s.bar % track.bars) + track.bars) % track.bars, nb = track.bars - pos;
           const src = off.createBufferSource(), g = off.createGain();
           src.buffer = track.buffer;
           src.playbackRate.value = track.rate || 1;
           g.gain.value = 0.9;
           src.connect(g).connect(off.destination);
-          src.start(t, Math.max(0, track.offset || 0));
-          src.stop(t + (track.bars * 240) / songBpm);
+          src.start(t, Math.max(0, (track.offset || 0) + (pos * 240) / track.bpm));
+          src.stop(t + (nb * 240) / songBpm);
+          beatOn = true;
         }
       }
       const b = await off.startRendering();

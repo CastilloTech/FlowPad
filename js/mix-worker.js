@@ -7,6 +7,7 @@ const JOBS = {
   finish: (a) => FP.mix.finish(a),
   timing: (a) => FP.structure.tempo(a.chans, a.rate, { bpm: a.bpm }),
   sections: (a) => ({ sections: FP.structure.sections(a) }),
+  drums: (a) => FP.structure.drums(a),
 };
 
 self.onmessage = (e) => {

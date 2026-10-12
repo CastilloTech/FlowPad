@@ -79,9 +79,10 @@
         // the bar counts most: hats (and rapped 16ths) hit every beat of a tempo twice too fast as well
         const sc = 0.5 * (ac(all, beat) + ac(low, beat)) + 0.5 * (ac(all, 2 * beat) + ac(low, 2 * beat)) + ac(all, 4 * beat) + 4 * ac(low, 4 * beat);
         // rap lives between about 70 (boom bap) and 170: even odds in there, less outside — and a
-        // little less above 160, where a boom bap read twice too fast would land
+        // little less above 160 and below 72, where a beat read twice too fast or slow would land (a
+        // phonk or trap beat at 135 read at 67.5) — slow boom bap starts about 72
         const out = t < 68 ? Math.log2(68 / t) : t > 172 ? Math.log2(t / 172) : 0;
-        let prior = Math.exp(-0.5 * (out / 0.15) ** 2) * (t > 160 ? 0.85 : 1);
+        let prior = Math.exp(-0.5 * (out / 0.15) ** 2) * (t > 160 || t < 72 ? 0.85 : 1);
         if (pulse) {
           // how many of the fastest pulse fit in a beat: 2 or 4 (8ths, 16ths) is how beats go
           const r = beat / pulse, k = Math.round(r);
@@ -206,7 +207,7 @@
     }
     const full = feats.map((_, i) => z[i][0] + z[i][2]); // loudness + brightness: how full it sounds
     // blocks, and how different two blocks are: bar for bar, chords and tone
-    const blocks = [];
+    let blocks = [];
     for (let a = 0; a < n; a += block) blocks.push({ a, bars: Math.min(block, n - a) });
     const barDist = (i, j) => {
       let t = 0;
@@ -214,31 +215,65 @@
       t /= dims;
       return hasChroma ? 0.5 * t + 2 * chromaDist(feats[i].chroma, feats[j].chroma) : t;
     };
+    // two blocks: their notes bar for bar (chords come in order), and their tone on average over the
+    // block (single bars wobble — a drum fill, a chord change — while a part's sound holds steady)
+    // (a whole 8-bar loop is heard by its first half: a drop or a fill sits at the end of a part)
+    const toneOf = (b) => { const m = b.bars > block ? block : b.bars, t = new Float64Array(dims); for (let k = 0; k < m; k++) for (let d = 0; d < dims; d++) t[d] += z[b.a + k][d] / m; return t; };
+    const tones = new Map();
+    const tone = (b) => { const key = `${b.a}:${b.bars}`; if (!tones.has(key)) tones.set(key, toneOf(b)); return tones.get(key); };
     const blockDist = (p, q) => {
-      const m = Math.min(p.bars, q.bars);
-      let t = 0;
-      for (let k = 0; k < m; k++) t += barDist(p.a + k, q.a + k);
-      return t / m;
+      const m = Math.min(p.bars, q.bars, block), tp = tone(p), tq = tone(q); // a loop's first half, as above
+      let t = 0, c = 0;
+      for (let d = 0; d < dims; d++) t += Math.abs(tp[d] - tq[d]);
+      t /= dims;
+      if (!hasChroma) return t;
+      for (let k = 0; k < m; k++) c += chromaDist(feats[p.a + k].chroma, feats[q.a + k].chroma);
+      return t + 2 * (c / m);
     };
-    const B = blocks.length, D = blocks.map((p) => blocks.map((q) => blockDist(p, q)));
+    let D = blocks.map((p) => blocks.map((q) => blockDist(p, q)));
+    const eps = hasChroma ? 0.02 : 0.2;
+    // the beat's loop: when each block matches the one two back (8 bars) much better than the one
+    // before (4 bars), the music goes round 8 bars at a time — two 4-bar halves with different chords
+    // — and inside a section neighbouring blocks always differ. Then compare whole loops: pair the
+    // blocks up, the pairs starting where the changes start (a 4-bar intro first, say).
+    if (blocks.length >= 6) {
+      // the lower quarter of each: with short parts, many comparisons cross a change
+      const low = (a) => { const t = [...a].sort((x, y) => x - y); return t.length ? t[t.length >> 2] : 0; };
+      const lag = (L) => low(blocks.slice(L).map((_, j) => D[j + L][j]));
+      if (lag(2) + eps / 2 < 0.5 * lag(1)) {
+        const nov = blocks.map((_, j) => (j >= 2 ? D[j][j - 2] : 0)), rise = [0, 0];
+        for (let j = 3; j < blocks.length; j++) rise[j % 2] += Math.max(0, nov[j] - nov[j - 1]);
+        const units = [];
+        let j = 0;
+        if (rise[1] > rise[0]) units.push(blocks[j++]);
+        for (; j < blocks.length; j += 2) units.push(j + 1 < blocks.length ? { a: blocks[j].a, bars: blocks[j].bars + blocks[j + 1].bars } : blocks[j]);
+        blocks = units;
+        D = blocks.map((p) => blocks.map((q) => blockDist(p, q)));
+      }
+    }
+    // a part-bar at the end (the last hit ringing out) takes no part in telling sections apart
+    const tail = blocks.length > 2 && blocks[blocks.length - 1].bars < block ? 1 : 0;
+    const B = blocks.length - tail;
     // "the same part": closer than the first big jump up from the smallest block-to-block steps
     // (within a section) — the jump to the steps across a change. The first, not the biggest: a beat
     // can change a little (verse to hook) and a lot (pad to drums), and both are changes. A small
     // floor keeps the near-zero steps between identical bars from looking like jumps. A beat whose
     // biggest step is no bigger than its usual wobble never changes: it's one part.
-    const steps = D.slice(1).map((row, j) => row[j]).sort((a, b) => a - b);
-    const eps = hasChroma ? 0.02 : 0.2;
+    const steps = D.slice(1, B).map((row, j) => row[j]).sort((a, b) => a - b);
     let tau = Infinity;
     if (steps.length) {
-      for (let i = 0; i + 1 < steps.length; i++) {
-        if ((steps[i + 1] + eps) / (steps[i] + eps) >= 2.5) { tau = Math.sqrt((steps[i] + eps) * (steps[i + 1] + eps)) - eps; break; }
-      }
-      const usual = steps[Math.floor(steps.length / 4)], biggest = steps[steps.length - 1];
+      // the first jump that's about as big as the biggest (never asking for more than 2.5×): a loop
+      // whose halves are on different chords wobbles a lot inside a part, so its jumps are smaller
+      const ratios = steps.slice(1).map((x, i) => (x + eps) / (steps[i] + eps)), need = Math.min(2.5, 0.8 * Math.max(1, ...ratios));
+      const at = ratios.findIndex((r) => r >= need && r >= 1.4);
+      if (at >= 0) tau = Math.sqrt((steps[at] + eps) * (steps[at + 1] + eps)) - eps;
+      // the usual wobble from the smallest steps: with whole loops and short parts, most steps are changes
+      const usual = steps[Math.floor(steps.length / 10)], biggest = steps[steps.length - 1];
       if (biggest < 2.5 * usual + (hasChroma ? 0.02 : 0.5)) tau = Infinity;
       else tau = Math.max(tau, 1.8 * usual);
     }
     // group the blocks: each joins the first group whose blocks it's (on average) close to
-    const group = new Int32Array(B).fill(-1), members = [];
+    const group = new Int32Array(blocks.length).fill(-1), members = [];
     for (let j = 0; j < B; j++) {
       let best = -1, bd = Infinity;
       members.forEach((ms, g) => { const d = mean(ms.map((m) => D[j][m])); if (d < tau && d < bd) { bd = d; best = g; } });
@@ -248,6 +283,7 @@
     }
     // a lone block that differs inside a run of one part is a variation of it (a drop, a fill)
     for (let j = 1; j + 1 < B; j++) if (group[j - 1] === group[j + 1] && group[j] !== group[j - 1] && members[group[j]].length === 1) group[j] = group[j - 1];
+    if (tail) group[B] = group[B - 1];
     // sections: runs of one group
     const secs = [];
     blocks.forEach((b, j) => {
@@ -256,7 +292,7 @@
     });
     // a ragged end of a bar or two (the last hit ringing out) belongs to the section before it — and
     // doesn't count towards how long that section is
-    let ragged = 0;
+    let ragged = tail ? blocks[blocks.length - 1].bars : 0; // (a part-bar tail is already in the last section)
     if (secs.length > 1 && secs[secs.length - 1].bars < block) { const t = secs.pop(); secs[secs.length - 1].bars += t.bars; ragged = t.bars; }
     secs.forEach((s) => { s.e = mean(full.slice(s.a, s.a + s.bars)); });
     // naming
@@ -265,18 +301,23 @@
     const others = (i) => secs.filter((_, j) => j !== i);
     const thinner = (i) => secs[i].e < mean(others(i).map((s) => s.e)) - 0.5;
     // an outro is its own part (or the intro's, come back); a part heard before is that part again
-    if (secs.length > 2 && secs[0].bars <= 8 && (count(secs[0].g) === 1 || thinner(0))) names[0] = 'Intro';
-    const endBars = secs[last].bars - ragged;
-    if (secs.length > 2 && endBars <= 8 && (count(secs[last].g) === 1 || (names[0] === 'Intro' && secs[last].g === secs[0].g))) names[last] = 'Outro';
+    // the first part is the intro when it's short and its own (or thinner) — or when it only ever
+    // comes back short, between longer parts: then each time it comes back in the middle it's a break
+    const barsOf = (i) => secs[i].bars - (i === last ? ragged : 0), g0 = secs[0].g;
+    const shortPart = secs.every((x, i) => x.g !== g0 || barsOf(i) <= 8) && secs.some((x, i) => x.g !== g0 && barsOf(i) > 8);
+    if (secs.length > 2 && secs[0].bars <= 8 && (count(g0) === 1 || thinner(0) || shortPart)) names[0] = 'Intro';
+    const endBars = barsOf(last);
+    if (secs.length > 2 && endBars <= 8 && (count(secs[last].g) === 1 || (names[0] === 'Intro' && secs[last].g === g0))) names[last] = 'Outro';
+    if (names[0] === 'Intro') secs.forEach((x, i) => { if (i && !names[i] && x.g === g0) names[i] = 'Break'; });
     const mid = secs.map((_, i) => i).filter((i) => !names[i]);
     const groups = [...new Set(mid.map((i) => secs[i].g))];
     // how alike a part's sections are each time it comes back (a hook repeats its words; verses don't)
-    const blockOf = (bar) => Math.floor(bar / block);
+    const unitsOf = (sec) => blocks.map((b, j) => (b.a >= sec.a && b.a < sec.a + sec.bars ? j : -1)).filter((j) => j >= 0);
     const alike = (ss) => {
       const ds = [];
       for (let x = 0; x < ss.length; x++) for (let y = x + 1; y < ss.length; y++) {
-        const p = secs[ss[x]], q = secs[ss[y]], nb = Math.floor(Math.min(p.bars, q.bars) / block);
-        for (let k = 0; k < nb; k++) ds.push(D[blockOf(p.a) + k][blockOf(q.a) + k]);
+        const up = unitsOf(secs[ss[x]]), uq = unitsOf(secs[ss[y]]);
+        for (let k = 0; k < Math.min(up.length, uq.length); k++) ds.push(D[up[k]][uq[k]]);
       }
       return ds.length ? mean(ds) : 0;
     };
@@ -330,5 +371,80 @@
   /** Tempo and bar 1, then (given those and how many bars) the sections: the worker's two jobs. */
   const sections = ({ chans, rate, bpm, offset, bars }) => detect(features(chans, rate, bpm, offset, bars));
 
-  FP.structure = { tempo, features, detect, sections, layout };
+  /**
+   * The drums in a beat, bar by bar, on 16ths: where the kick, the snare (or clap) and the hats hit —
+   * each heard in its own band (the kick below ~120 Hz, the snare's crack around 2 kHz, hats above
+   * 6.5 kHz) as a jump in that band's level right on the step. Plus the beat's outline for a
+   * timeline: its level every quarter bar, 0–1. Returns { hits: [{ kick, snare, hat }] (16-character
+   * strings of 0 / 1 per bar), wave: [numbers] }.
+   */
+  function drums({ chans, rate: rate0, bpm, offset, bars }) {
+    let x = monoOf(chans), rate = rate0;
+    if (rate0 > 32000) {
+      const h = new Float32Array(x.length >> 1), last = x.length - 1;
+      for (let i = 0; i < h.length; i++) { const j = 2 * i; h[i] = 0.25 * x[j > 0 ? j - 1 : 0] + 0.5 * x[j] + 0.25 * x[j < last ? j + 1 : last]; }
+      x = h; rate = rate0 / 2;
+    }
+    const { rbj, biquad } = FP.mix;
+    const twice = (type, hz, q) => { const c = rbj(type, hz, rate, q), y = biquad(x, c); return biquad(y, c, y); };
+    const step = (60 / bpm / 4) * rate, w = Math.max(8, Math.round(step / 4)); // four level readings a step
+    const envelope = (y) => {
+      const n = Math.floor(y.length / w), e = new Float32Array(n);
+      for (let j = 0; j < n; j++) { let s = 0; for (let i = j * w, z = i + w; i < z; i++) s += y[i] * y[i]; e[j] = 10 * Math.log10(s / w + 1e-10); }
+      return e;
+    };
+    const bands = { kick: envelope(twice('low', 120, 0.707)), snare: envelope(twice('band', 2000, 0.8)), hat: envelope(twice('high', 6500, 0.707)) };
+    const whole = envelope(x);
+    // how far under the whole mix a band can be and still be a drum of its own, not another's spill
+    // (a kick's click reaches the snare's and the hats' bands too); hats are quiet by nature
+    const under = { kick: 99, snare: 20, hat: 35 };
+    const start = Math.round((offset * rate) / w);
+    // how much each band jumps on each step (its level just after the step against half a step
+    // before), and how loud it is just after
+    const rise = {}, level = {}, total = bars * 16;
+    for (const [k, e] of Object.entries(bands)) {
+      const top = e.reduce((m, v) => Math.max(m, v), -200), r = new Float32Array(total), l = new Float32Array(total).fill(-200);
+      for (let s = 0; s < total; s++) {
+        const j = start + Math.round((s * step) / w);
+        if (j + 1 >= e.length) break;
+        const before = Math.min(e[j - 2] ?? -100, e[j - 1] ?? -100), after = Math.max(e[j], e[j + 1]); // before the file: silence
+        l[s] = after;
+        const mix = Math.max(whole[j], whole[j + 1] ?? whole[j]);
+        r[s] = after > top - 35 && after > mix - under[k] ? Math.max(0, after - before) : 0; // and loud enough to be part of the beat
+      }
+      rise[k] = r; level[k] = l;
+    }
+    // a hit: a jump well above this band's usual ones (hats tick constantly; a kick lands a few times a
+    // bar). The kick is the loudest thing in the low end — a bass note starts there too, quieter — and
+    // a snare is a burst of noise, so it jumps in the top end too, where a voice mostly doesn't.
+    // (and as loud as this beat's own kicks and snares usually are: a bar without one has none)
+    const thr = {}, usual = {};
+    for (const [k, r] of Object.entries(rise)) {
+      const sorted = Float32Array.from(r).sort();
+      thr[k] = Math.max(k === 'hat' ? 3 : 4, 0.45 * (sorted[Math.floor(sorted.length * 0.9)] || 0));
+      const lv = [...level[k]].filter((_, i) => r[i] >= thr[k]).sort((a, b) => a - b);
+      usual[k] = lv.length ? lv[Math.floor(lv.length * 0.75)] : -200;
+    }
+    const hits = [];
+    for (let b = 0; b < bars; b++) {
+      const at = (k, s) => b * 16 + s;
+      const loudest = (k) => { let m = -200; for (let s = 0; s < 16; s++) if (rise[k][at(k, s)] >= thr[k]) m = Math.max(m, level[k][at(k, s)]); return m; };
+      const lk = loudest('kick'), ls = loudest('snare');
+      let kick = '', snare = '', hat = '';
+      for (let s = 0; s < 16; s++) {
+        const i = at(0, s);
+        kick += rise.kick[i] >= thr.kick && level.kick[i] >= lk - 6 && level.kick[i] >= usual.kick - 5 ? '1' : '0';
+        snare += rise.snare[i] >= thr.snare && level.snare[i] >= ls - 6 && level.snare[i] >= usual.snare - 5 && rise.hat[i] >= 0.5 * thr.hat ? '1' : '0';
+        hat += rise.hat[i] >= thr.hat ? '1' : '0';
+      }
+      hits.push({ kick, snare, hat });
+    }
+    // the outline: the level every quarter bar, the loudest at 1 and 40 dB under it at 0
+    const all = envelope(x), q = Math.max(1, Math.round((4 * step) / w)), wave = [];
+    for (let j = start; j < all.length && wave.length < bars * 4; j += q) { let m = -200; for (let i = j; i < Math.min(all.length, j + q); i++) m = Math.max(m, all[i]); wave.push(m); }
+    const peak = wave.reduce((m, v) => Math.max(m, v), -200);
+    return { hits, wave: wave.map((v) => Math.round(Math.max(0, Math.min(1, (v - peak + 40) / 40)) * 100) / 100) };
+  }
+
+  FP.structure = { tempo, features, detect, sections, drums, layout };
 })();
