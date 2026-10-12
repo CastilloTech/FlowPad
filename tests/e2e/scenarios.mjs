@@ -269,7 +269,7 @@ export default [
   },
 
   {
-    name: 'structure: detect Intro / Verse / Hook / Outro, lay the song out, undo',
+    name: 'sections: marked by hand — drag and name, Mark at a tapped bar and while playing, join, lay the song out',
     audio: true,
     async run() {
       const { sleep } = E2E;
@@ -302,9 +302,44 @@ export default [
       E2E.dock(/Beat/).click(); await sleep(300);
       const out = { barsBefore: E2E.bars().length };
       E2E.choose(document.querySelector('#tfile'), new File([wav], 'Test Beat 90bpm.wav', { type: 'audio/wav' })); await sleep(2500);
-      document.querySelector('.beatform').requestSubmit();
-      // the sections are worked out in the background: wait for the offer to lay the song out
-      for (let i = 0; i < 100 && !document.querySelector('.sheet [data-a="go"]'); i++) await sleep(100);
+      document.querySelector('.beatform').requestSubmit(); await sleep(400);
+      out.toast = document.querySelector('#toast').textContent;
+      out.noOffer = !document.querySelector('.sheet [data-a="go"]'); // nothing guesses the sections any more
+      for (let i = 0; i < 80 && !document.querySelector('#tlw i'); i++) await sleep(100);
+      out.tip = !!document.querySelector('.tl-tip');
+      out.lanes = document.querySelectorAll('.tl-lane').length;
+      const w = () => document.querySelector('#tlw');
+      const at = (b) => { const r = w().getBoundingClientRect(); return { x: r.left + ((b + 0.5) / 40) * r.width, y: r.top + 10 }; };
+      const ev = (type, b) => { const p = at(b); w().dispatchEvent(new PointerEvent(type, { bubbles: true, clientX: p.x, clientY: p.y, pointerId: 1 })); };
+      const tap = async (b) => { ev('pointerdown', b); ev('pointerup', b); await sleep(150); };
+      const marked = () => [...document.querySelectorAll('#struct .sseg')].map((x) => `${x.querySelector('b').textContent} ${x.querySelector('span').textContent}`).join(' | ');
+      const name = async (n) => { [...document.querySelectorAll('[data-a="tlname"]')].find((b) => b.dataset.n === n).click(); await sleep(250); };
+      // drag across bars 1–4, name them
+      ev('pointerdown', 0); ev('pointermove', 1.5); ev('pointermove', 3); ev('pointerup', 3); await sleep(150);
+      await name('Intro');
+      out.afterIntro = marked();
+      // tap bar 13 and Mark: a cut there
+      await tap(12);
+      document.querySelector('[data-a="tlmark"]').click(); await sleep(250);
+      out.afterMark = marked();
+      // play from bar 21 and Mark while it plays: a cut at the bar that's playing
+      await tap(20);
+      document.querySelector('[data-a="tlplay"]').click(); await sleep(900);
+      document.querySelector('[data-a="tlmark"]').click(); await sleep(250);
+      document.querySelector('[data-a="tlplay"]').click(); await sleep(200);
+      out.afterLiveMark = marked();
+      // name the pieces by tapping them
+      document.querySelectorAll('#struct .sseg')[1].click(); await sleep(150); await name('Verse');
+      document.querySelectorAll('#struct .sseg')[2].click(); await sleep(150); await name('Hook');
+      out.named = marked();
+      // join the hook to the verse, then undo it
+      document.querySelectorAll('#struct .sseg')[2].click(); await sleep(150);
+      document.querySelector('[data-a="tlmerge"]').click(); await sleep(250);
+      out.joined = marked();
+      E2E.toastAct().click(); await sleep(300);
+      out.unjoined = marked();
+      // lay the song out to the marks
+      document.querySelector('[data-a="slayout"]').click(); await sleep(300);
       out.offer = document.querySelector('.sheet .msg')?.textContent;
       document.querySelector('.sheet [data-a="go"]').click(); await sleep(600);
       out.labels = [...document.querySelectorAll('.blk.label')].map((l) => l.textContent).join(' | ');
@@ -315,8 +350,17 @@ export default [
       return out;
     },
     check(r, assert) {
-      assert.equal(r.offer, 'Intro 4 · Verse 1 8 · Hook 8 · Verse 2 8 · Hook 8 · Outro 4');
-      assert.equal(r.labels, 'Intro | Verse 1 | Hook | Verse 2 | Hook | Outro');
+      assert.match(r.toast, /mark its sections/);
+      assert.ok(r.noOffer && r.tip);
+      assert.equal(r.lanes, 3, 'kick, snare and hat lanes');
+      assert.equal(r.afterIntro, 'Intro 4 | — 36');
+      assert.equal(r.afterMark, 'Intro 4 | — 8 | — 28');
+      assert.equal(r.afterLiveMark, 'Intro 4 | — 8 | — 8 | — 20');
+      assert.equal(r.named, 'Intro 4 | Verse 8 | Hook 8 | — 20');
+      assert.equal(r.joined, 'Intro 4 | Verse 16 | — 20');
+      assert.equal(r.unjoined, r.named);
+      assert.equal(r.offer, 'Intro 4 · Verse 8 · Hook 8 · Part 20');
+      assert.equal(r.labels, 'Intro | Verse | Hook | Part');
       assert.equal(r.bars, 40);
       assert.equal(r.firstLyric, 'Late night, pen');
       assert.equal(r.undoBars, r.barsBefore);
@@ -342,11 +386,13 @@ export default [
       const wav = E2E.wav((await off.startRendering()).getChannelData(0), rate);
       E2E.dock(/Beat/).click(); await sleep(300);
       E2E.choose(document.querySelector('#tfile'), new File([wav], 'Parts 120bpm.wav', { type: 'audio/wav' })); await sleep(2000);
-      document.querySelector('.beatform').requestSubmit();
-      for (let i = 0; i < 100 && !document.querySelector('.sheet [data-a="go"]'); i++) await sleep(100);
-      document.querySelector('.sheet [data-a="go"]')?.click(); await sleep(500);
-      if (!document.querySelector('#panel .tl-wave i')) { E2E.dock(/Beat/).click(); await sleep(300); E2E.dock(/Beat/).click(); await sleep(300); }
+      document.querySelector('.beatform').requestSubmit(); await sleep(400);
       for (let i = 0; i < 80 && !document.querySelector('#panel .tl-wave i'); i++) await sleep(100);
+      // mark the middle part: drag across bars 9–16 and name it
+      { const w = document.querySelector('#tlw'), r = w.getBoundingClientRect(), x = (b) => r.left + ((b + 0.5) / 24) * r.width;
+        const ev = (type, b) => w.dispatchEvent(new PointerEvent(type, { bubbles: true, clientX: x(b), clientY: r.top + 10, pointerId: 1 }));
+        ev('pointerdown', 8); ev('pointermove', 10); ev('pointermove', 15); ev('pointerup', 15); await sleep(150);
+        [...document.querySelectorAll('[data-a="tlname"]')].find((b) => b.dataset.n === 'Verse').click(); await sleep(300); }
       const out = { bars: document.querySelectorAll('#tlw i').length / 4, parts: [...document.querySelectorAll('#struct .sseg b')].map((b) => b.textContent) };
       // pick the middle part
       document.querySelectorAll('#struct .sseg')[1]?.click(); await sleep(200);

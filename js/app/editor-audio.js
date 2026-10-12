@@ -22,11 +22,10 @@ function editorAudio(ed) {
     const trackHTML = f.track
       ? `<div class="trackbox">${icon('rhyme')}<div class="grow"><b>${esc(tk ? tk.rec.name : 'Loading your beat…')}</b><span class="tsub">${tk ? `${tk.rec.bpm} BPM · ${tk.rec.bars}-bar loop${f.bpm !== tk.rec.bpm ? ` · playing at ${f.bpm}` : ''}` : ''}</span></div><label class="mini"><span>Drums</span><input type="checkbox" class="switch" id="tdrums" ${f.track.drums ? 'checked' : ''} aria-label="Play the drum patterns over the beat"></label><button class="icon-btn muted" data-a="tmenu" aria-label="Beat options">${icon('more')}</button></div>`
       : `<button class="btn block" data-a="timport">${icon('upload', 'sm')}Import your beat (MP3, WAV…)</button>`;
-    const secs = tk && tk.rec.sections;
-    const structHTML = !tk ? '' : timelineHTML(tk) + (tk.rec.bars < 8 ? ''
-      : secs && secs.length
-        ? `<div class="struct-act"><button class="chip sm" data-a="sedit">${icon('edit', 'sm')}Edit structure</button><button class="chip sm" data-a="slayout">${icon('project', 'sm')}Lay out song to match</button></div>`
-        : `<div class="struct-act"><button class="chip sm" data-a="sfind">${icon('sparkle', 'sm')}Find the beat’s structure</button></div>`) + drumsHTML(tk);
+    const named = tk && partsOf(tk).some((x) => x.name);
+    const structHTML = !tk ? '' : timelineHTML(tk) + (named
+      ? `<div class="struct-act"><button class="chip sm" data-a="sedit">${icon('edit', 'sm')}Edit as a list</button><button class="chip sm" data-a="slayout">${icon('project', 'sm')}Lay out song to match</button></div>`
+      : '') + drumsHTML(tk);
     panel.innerHTML = `<div class="ph"><div class="chips scroll grow">${patternsSorted().map((p) => `<button class="chip sm ${p.id === pat.id ? 'on' : ''}" data-a="bpick" data-id="${p.id}">${esc(p.name)}</button>`).join('')}<button class="chip sm ghost" data-a="bnew">${icon('plus', 'sm')}New</button></div><button class="icon-btn muted" data-a="bmore" aria-label="Pattern options">${icon('more')}</button>${closeBtn}</div>
       ${trackHTML}${structHTML}<input type="file" id="tfile" accept="${BEAT_TYPES}" hidden>
       <div class="seq" id="seq">${[0, 1].map((h) => `<div class="half">${TRACKS.map((t) => `<div class="trk"><span class="tl">${t.name}</span>${range(8).map((j) => { const k = h * 8 + j; const on = !!pat.steps[t.id][k]; return `<button class="st ${on ? 'on' : ''} ${k % 4 === 0 ? 'b' : ''}" data-a="step" data-t="${t.id}" data-k="${k}" aria-label="${t.name} step ${k + 1}" aria-pressed="${on}"></button>`; }).join('')}</div>`).join('')}</div>`).join('')}</div>
@@ -45,23 +44,49 @@ function editorAudio(ed) {
     if (tk) { bindTimeline(tk); showSel(); }
   }
 
-  // ---------------- the beat's timeline: see it, pick a part or some bars, play or loop them ----------------
-  let sel = null, looping = false, firstBar = 0; // sel: { from, to } in the beat's bars (to: null = just where to start)
-  const sectionAt = (tk, bar) => {
+  // ---------------- the beat's timeline: you mark its sections, by ear and by eye ----------------
+  // Play it and tap Mark where it changes, or drag across bars and name them. Its outline, a line
+  // every 4 bars and lanes showing where the kick, snare and hats play help you see the changes.
+  let sel = null, looping = false, firstBar = 0, headBar = -1; // sel: { from, to } in the beat's bars (to: null = just where to start)
+  const NAMES = ['Intro', 'Verse', 'Hook', 'Bridge', 'Break', 'Outro'];
+  /** The beat cut into its marked sections, covering it end to end: [{ name ('' = not named yet), from, to }]. */
+  function partsOf(tk) {
+    const N = tk.rec.bars, out = [];
     let a = 0;
-    for (const s of tk.rec.sections || []) { if (bar < a + s.bars) return { ...s, from: a, to: a + s.bars }; a += s.bars; }
-    return null;
+    for (const x of tk.rec.sections || []) { if (a >= N) break; const to = Math.min(N, a + x.bars); out.push({ name: x.name || '', from: a, to }); a = to; }
+    if (a < N) out.push({ name: '', from: a, to: N });
+    return out;
+  }
+  function saveParts(tk, parts) {
+    const kept = parts.filter((x) => x.to > x.from);
+    tk.rec.sections = kept.length === 1 && !kept[0].name ? null : kept.map((x) => ({ name: x.name, bars: x.to - x.from }));
+    db.put('beats', tk.rec);
+  }
+  /** Cut the section that `bar` falls inside, at that bar (the new half not named yet). */
+  const splitAt = (parts, bar) => {
+    const i = parts.findIndex((x) => bar > x.from && bar < x.to);
+    if (i < 0) return parts;
+    const x = parts[i];
+    return [...parts.slice(0, i), { ...x, to: bar }, { name: '', from: bar, to: x.to }, ...parts.slice(i + 1)];
   };
+  const partLabel = (x) => x.name || `Bars ${x.from + 1}–${x.to}`;
+
   function timelineHTML(tk) {
-    const N = tk.rec.bars, secs = tk.rec.sections, wave = tk.rec.wave;
-    const ticks = [];
+    const N = tk.rec.bars, wave = tk.rec.wave, parts = partsOf(tk), hits = tk.rec.hits;
+    const ticks = [], grid = [];
     for (let b = 0; b < N; b += N > 48 ? 16 : 8) ticks.push(`<span style="left:${(b / N) * 100}%">${b + 1}</span>`);
+    for (let b = 4; b < N; b += 4) grid.push(`<b class="g${b % 16 === 0 ? ' g16' : b % 8 === 0 ? ' g8' : ''}" style="left:${(b / N) * 100}%"></b>`);
+    // where each drum plays: one cell a bar, stronger the more it hits
+    const lane = (k, full) => hits ? `<div class="tl-lane" data-k="${k}"><span class="tl">${{ kick: 'K', snare: 'S', hat: 'H' }[k]}</span><div>${range(N).map((b) => { const n = [...((hits[b] || {})[k] || '')].filter((c) => c === '1').length; return `<i style="opacity:${n ? Math.min(1, 0.25 + (0.75 * n) / full) : 0}"></i>`; }).join('')}</div></div>` : '';
     return `<div class="tl" id="tl">
-      ${secs && secs.length ? `<div class="struct" id="struct" role="group" aria-label="Beat structure">${secs.map((s, i) => `<button class="sseg" data-a="tlsec" data-i="${i}" data-kind="${secKind(s.name)}" style="flex:${s.bars}" title="${esc(s.name)} · ${plural(s.bars, 'bar')}"><b>${esc(s.name)}</b><span>${s.bars}</span></button>`).join('')}</div>` : ''}
-      <div class="tl-wave" id="tlw" aria-label="The beat, bar by bar: drag across bars to choose them">${wave ? wave.slice(0, N * 4).map((v) => `<i style="height:${Math.round(10 + v * 90)}%"></i>`).join('') : '<span class="tl-wait">Reading the beat…</span>'}<div class="tl-sel" id="tlsel" hidden></div><div class="tl-head" id="tlhead" hidden></div></div>
+      <div class="struct" id="struct" role="group" aria-label="The beat's sections">${parts.map((x, i) => `<button class="sseg${x.name ? '' : ' blank'}" data-a="tlsec" data-i="${i}" data-kind="${secKind(x.name)}" style="flex:${x.to - x.from}" title="${esc(partLabel(x))} · ${plural(x.to - x.from, 'bar')}"><b>${esc(x.name || '—')}</b><span>${x.to - x.from}</span></button>`).join('')}</div>
+      <div class="tl-wave" id="tlw" aria-label="The beat, bar by bar: tap to start there, drag across bars to choose them">${wave ? wave.slice(0, N * 4).map((v) => `<i style="height:${Math.round(10 + v * 90)}%"></i>`).join('') : '<span class="tl-wait">Reading the beat…</span>'}${grid.join('')}<div class="tl-sel" id="tlsel" hidden></div><div class="tl-head" id="tlhead" hidden></div></div>
+      ${lane('kick', 4)}${lane('snare', 2)}${lane('hat', 8)}
       <div class="tl-ticks">${ticks.join('')}</div>
     </div>
-    <div class="tl-bar"><span class="tl-cap" id="tlcap"></span><span class="grow"></span><button class="icon-btn muted" data-a="tlclear" id="tlclear" aria-label="Clear the choice" hidden>${icon('x')}</button><button class="chip sm" data-a="tlloop" id="tlloop" aria-pressed="false">${icon('loop', 'sm')}Loop</button><button class="chip sm on" data-a="tlplay" id="tlplay">${icon(T.drums ? 'stop' : 'play', 'sm')}${T.drums ? 'Stop' : 'Play'}</button></div>`;
+    <div class="tl-bar"><span class="tl-cap" id="tlcap"></span><span class="grow"></span><button class="icon-btn muted" data-a="tlclear" id="tlclear" aria-label="Clear the choice" hidden>${icon('x')}</button><button class="chip sm" data-a="tlmark" id="tlmark" title="Cut a section where the beat changes">${icon('plus', 'sm')}Mark</button><button class="chip sm" data-a="tlloop" id="tlloop" aria-pressed="false">${icon('loop', 'sm')}Loop</button><button class="chip sm on" data-a="tlplay" id="tlplay">${icon(T.drums ? 'stop' : 'play', 'sm')}${T.drums ? 'Stop' : 'Play'}</button></div>
+    <div class="tl-name" id="tlname" hidden><span class="tl-q">Name it</span>${NAMES.map((n) => `<button class="chip sm" data-a="tlname" data-n="${n}">${n}</button>`).join('')}<button class="chip sm ghost" data-a="tlname" data-n="">Other…</button><button class="chip sm ghost" data-a="tlmerge" id="tlmerge">Join to the one before</button></div>
+    ${parts.length === 1 && !parts[0].name ? '<p class="src tl-tip">Play it and tap <b>Mark</b> each time the beat changes — or drag across bars and name them. The outline and the drum lanes show where things drop in and out.</p>' : ''}`;
   }
   /** Drag across the timeline to choose bars; tap it to choose where to start. */
   function bindTimeline(tk) {
@@ -85,8 +110,8 @@ function editorAudio(ed) {
     });
     w.addEventListener('pointercancel', () => { down = null; });
   }
-  function setSel(s) {
-    sel = s;
+  function setSel(x) {
+    sel = x;
     if (!sel || sel.to == null) looping = false;
     showSel();
     if (T.drums) syncTransport(true); // playing: carry on from the new choice
@@ -95,7 +120,7 @@ function editorAudio(ed) {
   function showSel() {
     const tk = trackReady(), box = $('#tlsel'), cap = $('#tlcap');
     if (!tk || !box) return;
-    const N = tk.rec.bars;
+    const N = tk.rec.bars, parts = partsOf(tk);
     box.hidden = !sel;
     if (sel) {
       box.style.left = `${(sel.from / N) * 100}%`;
@@ -103,37 +128,77 @@ function editorAudio(ed) {
       box.classList.toggle('point', sel.to == null);
       box.classList.toggle('looping', looping);
     }
-    const sec = sel && sel.to != null && (tk.rec.sections || []).find((x, i, all) => { const a = all.slice(0, i).reduce((t, y) => t + y.bars, 0); return a === sel.from && a + x.bars === sel.to; });
-    cap.textContent = !sel ? 'Tap the beat to start there, or drag across bars to choose them'
+    const pi = sel && sel.to != null ? parts.findIndex((x) => x.from === sel.from && x.to === sel.to) : -1;
+    cap.textContent = !sel ? 'Tap the beat to start there, or drag across bars'
       : sel.to == null ? `From bar ${sel.from + 1}`
-        : `${sec ? `${sec.name} · ` : ''}bars ${sel.from + 1}–${sel.to}`;
+        : `${pi >= 0 && parts[pi].name ? `${parts[pi].name} · ` : ''}bars ${sel.from + 1}–${sel.to}`;
     const lp = $('#tlloop');
     lp.disabled = !sel || sel.to == null;
     lp.classList.toggle('on', looping);
     lp.setAttribute('aria-pressed', String(looping));
     $('#tlclear').hidden = !sel;
-    $$('#struct .sseg').forEach((b, i) => {
-      const a = (tk.rec.sections || []).slice(0, i).reduce((t, y) => t + y.bars, 0);
-      b.classList.toggle('picked', !!sel && sel.to != null && a === sel.from && a + tk.rec.sections[i].bars === sel.to);
-    });
+    // naming: for a stretch of bars or a section; joining: for a section after the first
+    $('#tlname').hidden = !sel || sel.to == null;
+    $('#tlmerge').hidden = pi < 1;
+    $$('#struct .sseg').forEach((b, i) => b.classList.toggle('picked', i === pi));
     updateTransportUI();
   }
   VA.tlsec = (el) => {
     const tk = trackReady();
     if (!tk) return;
-    const i = +el.dataset.i, from = tk.rec.sections.slice(0, i).reduce((a, s) => a + s.bars, 0);
-    setSel({ from, to: from + tk.rec.sections[i].bars });
+    const x = partsOf(tk)[+el.dataset.i];
+    if (!x) return;
+    setSel({ from: x.from, to: x.to });
     // and on the sheet, if the song's laid out to match
-    const ri = barLines(f)[from], b = ri != null && blkEl(ri);
+    const ri = barLines(f)[x.from], b = ri != null && blkEl(ri);
     if (b) b.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  };
+  /** Mark: cut a section where the beat changes — at the bar that's playing, or the one you tapped. */
+  VA.tlmark = () => {
+    const tk = trackReady();
+    if (!tk) return;
+    const bar = T.drums && headBar >= 0 ? headBar : sel ? sel.from : -1;
+    if (bar <= 0) { toast(T.drums ? 'That’s the very start — tap Mark where the beat changes' : 'Play the beat and tap Mark each time it changes'); return; }
+    const parts = partsOf(tk), next = splitAt(parts, bar);
+    if (next === parts) { toast(`There’s already a mark at bar ${bar + 1}`); return; }
+    saveParts(tk, next);
+    buzz(10);
+    toast(`Marked bar ${bar + 1}`, { label: 'Undo', fn: () => { saveParts(tk, parts); PBeat(); } });
+    PBeat();
+  };
+  /** Name the chosen bars (or section): they become one section. */
+  VA.tlname = async (el) => {
+    const tk = trackReady();
+    if (!tk || !sel || sel.to == null) return;
+    let name = el.dataset.n;
+    if (!name) { name = await ask({ title: 'Name this section', placeholder: 'Pre-hook, Drop, Verse 2…', ok: 'Name it' }); if (!name) return; }
+    const before = partsOf(tk), cut0 = splitAt(splitAt(before, sel.from), sel.to);
+    const next = [...cut0.filter((x) => x.to <= sel.from), { name, from: sel.from, to: sel.to }, ...cut0.filter((x) => x.from >= sel.to)];
+    saveParts(tk, next);
+    toast(`Bars ${sel.from + 1}–${sel.to}: ${name}`, { label: 'Undo', fn: () => { saveParts(tk, before); PBeat(); } });
+    PBeat();
+  };
+  /** Join the chosen section to the one before it (it takes that one's name). */
+  VA.tlmerge = () => {
+    const tk = trackReady();
+    if (!tk || !sel) return;
+    const parts = partsOf(tk), i = parts.findIndex((x) => x.from === sel.from && x.to === sel.to);
+    if (i < 1) return;
+    const prev = parts[i - 1], next = [...parts.slice(0, i - 1), { ...prev, name: prev.name || parts[i].name, to: parts[i].to }, ...parts.slice(i + 1)];
+    saveParts(tk, next);
+    sel = { from: prev.from, to: parts[i].to };
+    toast('Joined', { label: 'Undo', fn: () => { saveParts(tk, parts); PBeat(); } });
+    PBeat();
   };
   VA.tlloop = () => { if (!sel || sel.to == null) return; looping = !looping; showSel(); if (T.drums) syncTransport(true); };
   VA.tlclear = () => setSel(null);
   VA.tlplay = () => { stopPlayer(); T.drums = !T.drums; autoDrums = false; syncTransport(true); };
-  /** The playhead on the timeline: bar b, step k of the beat. */
+  /** The playhead on the timeline: bar b, step k of the beat (and the bar Mark would cut at). */
   function moveHead(b, k) {
     const tk = trackReady(), h = $('#tlhead');
-    if (!tk || !h) return;
+    if (!tk) return;
+    headBar = Math.round((b % tk.rec.bars) + k / 16) % tk.rec.bars; // a tap late in a bar means the next one
+    if (!h) return;
     h.hidden = false;
     h.style.left = `${(((b % tk.rec.bars) + k / 16) / tk.rec.bars) * 100}%`;
   }
@@ -182,7 +247,7 @@ function editorAudio(ed) {
     const from = pick ? secs.slice(0, drumsPick).reduce((t, s) => t + s.bars, 0) : 0;
     const p = typical(tk, from, pick ? from + pick.bars : tk.rec.bars);
     const row = (k, l) => `<div class="xd-row"><span class="tl">${l}</span>${p[k].map((v, s) => `<i class="${v ? 'on' : ''}${s % 4 === 0 ? ' b' : ''}"></i>`).join('')}</div>`;
-    return `<div class="xd"><div class="xd-h"><b>Drums in this beat</b>${secs.length ? `<div class="chips scroll" id="xdsec"><button class="chip sm ${drumsPick < 0 ? 'on' : ''}" data-a="xdpick" data-i="-1">Whole beat</button>${secs.map((s, i) => `<button class="chip sm ${drumsPick === i ? 'on' : ''}" data-a="xdpick" data-i="${i}">${esc(s.name)}</button>`).join('')}</div>` : ''}</div>
+    return `<div class="xd"><div class="xd-h"><b>Drums in this beat</b>${secs.length ? `<div class="chips scroll" id="xdsec"><button class="chip sm ${drumsPick < 0 ? 'on' : ''}" data-a="xdpick" data-i="-1">Whole beat</button>${secs.map((x, i) => `<button class="chip sm ${drumsPick === i ? 'on' : ''}" data-a="xdpick" data-i="${i}">${esc(x.name || `Part ${i + 1}`)}</button>`).join('')}</div>` : ''}</div>
       <div class="xd-grid">${row('kick', 'Kick')}${row('snare', 'Snare')}${row('hat', 'Hats')}</div>
       <p class="src">Heard in the beat — and shown under every bar of the sheet. Save it to play it, change it, or use it on other songs.</p>
       <button class="btn block" data-a="xdsave">${icon('drum', 'sm')}Save as a drum pattern</button></div>`;
@@ -221,7 +286,6 @@ function editorAudio(ed) {
     const bpm = clamp((timing && timing.bpm) || (named && +named[1]) || f.bpm, 50, 220);
     const b = { id: FP.uid(), name: fl.name.replace(/\.[^.]+$/, '') || 'My beat', blob: fl, mime: fl.type, bpm, offset: (timing && timing.offset) || 0, bars: 4, duration: buf.duration, created: Date.now() };
     if (!(await beatSettings(b, true, buf))) return;
-    if (b.bars >= 8) { toast('Finding the beat’s sections…'); b.sections = await findSections(b, buf); }
     await db.put('beats', b);
     tracks.set(b.id, { rec: b, buf });
     sel = null; looping = false;
@@ -233,17 +297,12 @@ function editorAudio(ed) {
     if (T.drums) syncTransport(true);
     paintAll();
     if (S.panel === 'beat') PBeat();
-    if (b.sections && b.sections.length > 1) offerLayout(b.sections);
-    else toast('Beat added — hit Play');
+    toast(b.bars >= 8 ? 'Beat added — mark its sections on the timeline in Beat' : 'Beat added — hit Play');
   }
 
   // ----- the imported beat's structure: Intro · Verse · Hook · Outro -----
   const secKind = (name) => (/^(intro|outro)/i.test(name) ? 'edge' : /^(hook|chorus)/i.test(name) ? 'hook' : /^bridge/i.test(name) ? 'bridge' : 'verse');
   const secSummary = (secs) => secs.map((s) => `${s.name} ${s.bars}`).join(' · ');
-  /** A beat's sections (Intro, Verse, Hook…), worked out in the worker. Resolves null if it can't tell. */
-  async function findSections(b, buf) {
-    try { return (await FP.mix.offThread('sections', { chans: monoOf(buf), rate: buf.sampleRate, bpm: b.bpm, offset: b.offset, bars: b.bars })).sections; } catch (e) { console.error(e); return null; }
-  }
   /** The beat as one channel, a copy (it's handed to the worker). */
   function monoOf(buf) {
     const a = buf.getChannelData(0), m = new Float32Array(a.length);
@@ -261,25 +320,15 @@ function editorAudio(ed) {
   }
   function offerLayout(secs) {
     const sh = sheet({
-      title: 'Beat structure found',
+      title: 'Lay out your song',
       html: `<p class="msg">${esc(secSummary(secs))}</p><p class="msg">Lay out your song to match? Each section gets a label at the bar where the beat changes, and empty bars are added to cover the whole beat. Your lyrics stay in order.</p>
         <div class="sheet-actions"><button class="btn" data-close>Not now</button><button class="btn primary" data-a="go">Lay out song</button></div>`,
       actions: { go: () => { sh.close(); layOut(secs); } },
     });
   }
-  VA.sfind = async () => {
-    const tk = trackReady();
-    if (!tk) return;
-    toast('Finding the beat’s sections…');
-    tk.rec.sections = await findSections(tk.rec, tk.buf);
-    db.put('beats', tk.rec);
-    PBeat();
-    if (tk.rec.sections && tk.rec.sections.length > 1) offerLayout(tk.rec.sections);
-    else toast('No clear changes found — the beat sounds the same throughout');
-  };
   VA.slayout = () => {
     const tk = trackReady();
-    if (tk && tk.rec.sections) offerLayout(tk.rec.sections);
+    if (tk && tk.rec.sections) offerLayout(partsOf(tk).map((x) => ({ name: x.name || 'Part', bars: x.to - x.from })));
   };
   /** Scroll the sheet to the first bar of section i. */
   VA.sjump = (el) => {
@@ -302,7 +351,7 @@ function editorAudio(ed) {
       box0.innerHTML = `${secs.map((s, i) => `<div class="sed-row" data-i="${i}"><input class="field" data-f="name" value="${esc(s.name)}" aria-label="Section name"><input class="field num" data-f="bars" type="number" inputmode="numeric" min="1" max="256" value="${s.bars}" aria-label="Bars"><button type="button" class="icon-btn muted" data-x="${i}" aria-label="Remove section">${icon('x')}</button></div>`).join('')}
         <button type="button" class="btn block" id="sadd">${icon('plus', 'sm')}Add section</button>
         <p class="src" id="stot"></p>
-        <div class="sheet-actions"><button type="button" class="btn" id="sredo">${icon('sparkle', 'sm')}Detect again</button><button type="button" class="btn primary" id="ssave">Save</button></div>
+        <div class="sheet-actions"><button type="button" class="btn primary" id="ssave">Save</button></div>
         <button type="button" class="btn block" id="ssavelay">Save and lay out song</button>`;
       tot();
     };
@@ -322,7 +371,6 @@ function editorAudio(ed) {
       const x = e.target.closest('[data-x]');
       if (x) { secs.splice(+x.dataset.x, 1); draw(); return; }
       if (e.target.closest('#sadd')) { secs.push({ name: secs.some((s) => /^hook/i.test(s.name)) ? 'Verse' : 'Hook', bars: 8 }); draw(); return; }
-      if (e.target.closest('#sredo')) { findSections(tk.rec, tk.buf).then((r) => { secs = r || secs; draw(); }); return; }
       const save = e.target.closest('#ssave, #ssavelay');
       if (!save) return;
       secs = secs.filter((s) => s.bars > 0).map((s) => ({ name: s.name.trim() || 'Section', bars: s.bars }));
@@ -418,14 +466,13 @@ function editorAudio(ed) {
           if (!(await beatSettings(b, false, tk.buf))) return;
           const moved = b.bpm !== tk.rec.bpm || b.offset !== tk.rec.offset || b.bars !== tk.rec.bars;
           Object.assign(tk.rec, b);
-          if (moved && tk.rec.sections) tk.rec.sections = tk.rec.bars >= 8 ? await findSections(tk.rec, tk.buf) : null; // bar lines moved: find the sections again
           if (moved) { delete tk.rec.hits; delete tk.rec.wave; sel = null; looping = false; readDrums(tk); } // and its drums
           await db.put('beats', tk.rec);
           setBpm(b.bpm);
           if (T.drums) syncTransport(true);
           PBeat();
         } },
-        { label: 'Structure', icon: 'project', hint: 'Intro, verses, hooks…', onClick: () => (tk.rec.bars >= 8 ? (tk.rec.sections ? VA.sedit() : VA.sfind()) : toast('Structure needs a beat of 8 bars or more')) },
+        { label: 'Sections as a list', icon: 'project', hint: 'Intro, verses, hooks…', onClick: () => VA.sedit() },
         { label: 'Replace with another file', icon: 'upload', onClick: () => $('#tfile').click() },
         { label: 'Remove beat', icon: 'trash', danger: true, hint: 'Back to the drum patterns', onClick: async () => { const id = f.track.id; delete f.track; saveSoon('files', f); await dropBeat(id); if (T.drums) syncTransport(true); paintAll(); PBeat(); } },
       ],

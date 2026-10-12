@@ -510,13 +510,13 @@
 
   /**
    * A job in a worker, so the screen stays smooth: 'finish' (the mix), 'denoise' (a take), or an
-   * imported beat's 'timing' (tempo, bar 1) or 'sections' (js/structure.js). It runs
+   * imported beat's 'timing' (tempo, bar 1) or 'drums' (js/structure.js). It runs
    * here instead where workers can't start. Arrays passed in are handed over, not copied: don't use
    * them afterwards.
    */
   function offThread(op, args) {
     const run = () => (op === 'denoise' ? denoise(args) : op === 'finish' ? finish(args)
-      : op === 'timing' ? FP.structure.tempo(args.chans, args.rate, { bpm: args.bpm }) : op === 'drums' ? FP.structure.drums(args) : { sections: FP.structure.sections(args) });
+      : op === 'timing' ? FP.structure.tempo(args.chans, args.rate, { bpm: args.bpm }) : FP.structure.drums(args));
     return new Promise((resolve, reject) => {
       let w;
       try { w = new Worker('js/mix-worker.js'); } catch (e) { try { resolve(run()); } catch (x) { reject(x); } return; }

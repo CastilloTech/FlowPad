@@ -422,13 +422,7 @@
     return new Promise((res, rej) => ctx.decodeAudioData(data, res, rej));
   }
 
-  /**
-   * How each bar of a beat sounds, for finding its sections: overall loudness, bass (kick/808)
-   * and brightness (hats, top end), in dB. Bars are cut from `offset` at the beat's tempo.
-   */
   const chansOf = (buffer) => Array.from({ length: Math.min(2, buffer.numberOfChannels) }, (_, c) => buffer.getChannelData(c));
-  /** Each bar's sound, for finding the beat's sections (js/structure.js). */
-  const barFeatures = (buffer, bpm, offset, bars) => FP.structure.features(chansOf(buffer), buffer.sampleRate, bpm, offset, bars);
   /** The beat's tempo and where its bar 1 starts ({ bpm, offset }); with `bpm` known, just bar 1. */
   const guessTiming = (buffer, bpm = null) => FP.structure.tempo(chansOf(buffer), buffer.sampleRate, { bpm });
   const guessBpm = (buffer) => guessTiming(buffer).bpm;
@@ -454,7 +448,6 @@
     peakOf,
     guessBpm,
     guessTiming,
-    barFeatures,
     /** Play a decoded take at audio-clock time t; returns a stop function. */
     playBuffer(buffer, t, onEnd) {
       ensure();
