@@ -787,10 +787,13 @@ function Editor(id) {
   // A ring fills while you hold; the step lifts into a label that follows your finger and snaps
   // onto steps. Over words, they slide along to show the shift you'll get; pause there and it
   // switches to replace. Let go where you started for the step menu; off the grid cancels.
-  const drag = { t: 0, ringT: 0, from: null, on: false, ghost: null, over: null, raf: 0, x: 0, y: 0, sx: 0, sy: 0, mouse: false, suppress: false, mode: 'move', hold: 0, left: false, moved: [] };
+  // A word from the rhymes, the strip or the bank drags the same way (drag.from.word), from below.
+  const drag = { t: 0, ringT: 0, from: null, on: false, ghost: null, over: null, raf: 0, x: 0, y: 0, sx: 0, sy: 0, mouse: false, suppress: false, mode: 'move', hold: 0, left: false, inSheet: false, moved: [] };
   const cellAt = (x, y) => { const el = document.elementFromPoint(x, y); return el && el.closest('#lines .cell'); };
   const HOLD_MS = { mouse: 450, touch: 320 };
   const word = (s) => s.trim().replace(/-$/, '');
+  /** Where the sheet ends: the top of the dock, or of its panel when one is open. */
+  const dockTop = () => { const p = $('#panel'); return Math.min(dock.getBoundingClientRect().top, p && !p.hidden ? p.getBoundingClientRect().top : Infinity); };
 
   function dragStart() {
     const { r, k, el } = drag.from;
@@ -801,7 +804,7 @@ function Editor(id) {
     inp.hidden = true;
     el.classList.add('lift');
     buzz(10);
-    const txt = rows[r].cells[k].trim();
+    const txt = drag.from.word || rows[r].cells[k].trim();
     if (txt) {
       drag.ghost = document.createElement('div');
       drag.ghost.className = 'drag-ghost';
@@ -842,6 +845,7 @@ function Editor(id) {
 
   function dragMove(x, y) {
     drag.x = x; drag.y = y;
+    if (y < dockTop() - 20) drag.inSheet = true;
     if (!drag.ghost) return;
     const c = cellAt(x, y);
     const target = c && c !== drag.from.el ? c : null;
@@ -881,7 +885,8 @@ function Editor(id) {
   function autoScroll() {
     if (!drag.on) return;
     const top = topbar.getBoundingClientRect().bottom, bot = dock.getBoundingClientRect().top, zone = 90;
-    const pull = drag.y < top + zone ? -(top + zone - drag.y) : drag.y > bot - zone ? drag.y - (bot - zone) : 0;
+    const pull = drag.from.word && !drag.inSheet ? 0 // a word still over the dock: not until it's out over the sheet
+      : drag.y < top + zone ? -(top + zone - drag.y) : drag.y > bot - zone ? drag.y - (bot - zone) : 0;
     if (pull) {
       window.scrollBy(0, Math.sign(pull) * Math.ceil(26 * Math.min(1, Math.abs(pull) / zone) ** 2));
       dragMove(drag.x, drag.y);
@@ -905,17 +910,20 @@ function Editor(id) {
     clearTimeout(drag.ringT);
     clearTimeout(drag.hold);
     cancelAnimationFrame(drag.raf);
-    const { from, over, on, ghost, mode, left } = drag;
+    const { from, over, on, ghost, mode, left, inSheet } = drag;
     if (from) from.el.classList.remove('holding', 'lift');
     if (over) over.classList.remove('drop');
-    Object.assign(drag, { t: 0, from: null, on: false, ghost: null, over: null, mode: 'move' });
+    Object.assign(drag, { t: 0, from: null, on: false, ghost: null, over: null, mode: 'move', inSheet: false });
     if (drag.lexLater) { drag.lexLater = false; setTimeout(paintAll, 0); }
     if (!on) return;
     drag.suppress = true; // swallow the click that follows the drop
     setTimeout(() => { drag.suppress = false; }, 400);
     const back = !over || (over === from.el && left);
+    // a rhyme held and let go where it lifted: pinned to the bank, as holding one always did
+    if (drop && from.word && from.pin && !left && !inSheet) { if (ghost) ghost.remove(); from.pin(); return; }
     if (!drop || back) { clearPreview(); if (ghost) flyHome(ghost, from.el); return; } // cancelled
     if (ghost) ghost.remove();
+    if (from.word) { dropWord(from.word, rowOf(over), +over.dataset.k, mode); return; }
     if (over === from.el) { clearPreview(); stepMenu(from.r, from.k); return; }
     moveStep(from.r, from.k, rowOf(over), +over.dataset.k, mode);
   }
@@ -932,6 +940,19 @@ function Editor(id) {
     buzz(12);
     sound();
     if (mode === 'replace' && there) toast(`Replaced “${word(there)}”`, { label: 'Undo', fn: undo });
+  }
+
+  /** Drop a word onto a step: onto a rest it lands there; onto words it shifts them along or replaces that word. */
+  function dropWord(w, tr, tk, mode) {
+    clearPreview();
+    const old = mode === 'replace' ? wordAt(tr, tk) : null;
+    if (old) for (let i = old.k0; i <= old.k1; i++) rows[tr].cells[i] = '';
+    const p = placeWords(tr, old ? old.k0 : tk, [w], false);
+    commit();
+    activate(p.r, Math.min(lastStep(p.r), p.k + 1), { focus: false });
+    buzz(12);
+    sound();
+    if (old) toast(`Swapped “${old.text}” for “${w}”`, { label: 'Undo', fn: undo });
   }
 
   function stepMenu(r, k) {
@@ -965,7 +986,7 @@ function Editor(id) {
     if (!drag.from) return;
     if (drag.on) { e.preventDefault(); dragMove(e.clientX, e.clientY); return; }
     const moved = Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy);
-    if (drag.mouse && moved > 6 && rows[drag.from.r].cells[drag.from.k].trim()) { clearTimeout(drag.t); clearTimeout(drag.ringT); drag.x = e.clientX; drag.y = e.clientY; dragStart(); }
+    if (drag.mouse && moved > 6 && (drag.from.word || rows[drag.from.r].cells[drag.from.k].trim())) { clearTimeout(drag.t); clearTimeout(drag.ringT); drag.x = e.clientX; drag.y = e.clientY; dragStart(); }
     else if (!drag.mouse && moved > 10) dragEnd(false); // a scroll or a swipe, not a hold
   };
   const onDragUp = (e) => dragEnd(e.type === 'pointerup');
@@ -974,7 +995,25 @@ function Editor(id) {
   document.addEventListener('pointercancel', onDragUp);
   box.addEventListener('touchmove', (e) => { if (drag.on) e.preventDefault(); }, { passive: false }); // hold the page still while dragging
   box.addEventListener('contextmenu', (e) => { if (e.target.closest('.cell')) e.preventDefault(); });
-  box.addEventListener('click', (e) => { if (drag.suppress) { drag.suppress = false; e.stopPropagation(); e.preventDefault(); } }, true);
+  const swallowClick = (e) => { if (drag.suppress) { drag.suppress = false; e.stopPropagation(); e.preventDefault(); } };
+  box.addEventListener('click', swallowClick, true);
+
+  // a word chip: with a mouse, drag it; on a touchscreen, hold it until it lifts
+  const onChipDown = (e) => {
+    const c = e.target.closest('#rres [data-w], [data-a="ins"][data-w]');
+    if (!c || e.button > 0 || !E) return;
+    dragEnd(false);
+    const pin = c.closest('#rres') ? () => { c.classList.toggle('pinned', toggleBank(c.dataset.w)); updateStrip(true); buzz(12); } : null;
+    drag.from = { r: -1, k: -1, el: c, word: c.dataset.w, pin };
+    drag.x = drag.sx = e.clientX;
+    drag.y = drag.sy = e.clientY;
+    drag.mouse = e.pointerType === 'mouse';
+    if (!drag.mouse) drag.t = setTimeout(dragStart, HOLD_MS.touch);
+  };
+  const onChipTouch = (e) => { if (drag.on) e.preventDefault(); }; // the panel and the strip hold still too
+  dock.addEventListener('pointerdown', onChipDown);
+  dock.addEventListener('touchmove', onChipTouch, { passive: false });
+  dock.addEventListener('click', swallowClick, true);
 
   // ----- swipe a bar: left to delete, right to duplicate (Undo in the message) -----
   const sw = { el: null, x0: 0, y0: 0, dx: 0, on: false, dead: false, armed: false };
@@ -1097,6 +1136,7 @@ function Editor(id) {
       items: [
         { label: 'Rhythm…', icon: 'flow', hint: 'Cadences, triplets, tap one in', onClick: () => rhythmSheet(r) },
         { label: 'Hear this bar', icon: 'play', hint: 'Its words as blips, over the beat', onClick: () => hearBar(r) },
+        { label: 'Hear all bars', icon: 'play', hint: 'The whole song’s words as blips, from bar 1', onClick: () => hearSong(0) },
         { label: 'Insert bar above', icon: 'plus', onClick: () => { if (cur && cur.r >= r) cur.r++; insertBar(r); activate(r, 0); } },
         { label: 'Insert bar below', icon: 'plus', onClick: () => { if (cur && cur.r > r) cur.r++; insertBar(r + 1); activate(r + 1, 0); } },
         { label: 'Clear bar', icon: 'x', onClick: () => { row.cells = newBarRow().cells; commit(); } },
@@ -1450,7 +1490,8 @@ function Editor(id) {
     });
     bindWordChips($('#rres'), {
       onTap: (c) => insertWord(c.dataset.w),
-      onHold: (c) => { c.classList.toggle('pinned', toggleBank(c.dataset.w)); updateStrip(true); },
+      // a held mouse pins it; a held finger lifts it to drag, and pins it if let go there
+      onHold: (c) => { if (drag.on) return; c.classList.toggle('pinned', toggleBank(c.dataset.w)); updateStrip(true); },
     });
     runRhymes();
   }
@@ -1491,7 +1532,7 @@ function Editor(id) {
     get nowCell() { return nowCell; }, set nowCell(v) { nowCell = v; },
     undo: () => undo(), saveFlow: (r) => saveFlow(r), flowDots: (s0, n) => flowDots(s0, n), activate: (r, k) => activate(r, k),
   };
-  const { PBeat, PTakes, syncTransport, updateTransportUI, stopPlayer, finishRec, loadTrack, hearBar, tapCadence, hitsFor: beatHits } = editorAudio(ed);
+  const { PBeat, PTakes, syncTransport, updateTransportUI, stopPlayer, finishRec, loadTrack, hearBar, hearSong, tapCadence, hitsFor: beatHits } = editorAudio(ed);
   hitsFor = beatHits;
 
   // ----- Bank panel -----
@@ -1552,7 +1593,7 @@ function Editor(id) {
   VA.apin = (el) => { el.classList.toggle('pinned', toggleBank(el.dataset.w)); renderBank(); };
 
 
-  E = { f, spb: 4, syncTransport, updateTransportUI };
+  E = { f, spb: 4, syncTransport, updateTransportUI, hearSong };
   // new pronunciations repaint the sheet — but not mid-drag, which would pull the steps out from under it
   S.lex = () => { if (drag.on) drag.lexLater = true; else paintAll(); };
   loadTrack();
@@ -1567,6 +1608,9 @@ function Editor(id) {
     document.removeEventListener('pointermove', onDragMove);
     document.removeEventListener('pointerup', onDragUp);
     document.removeEventListener('pointercancel', onDragUp);
+    dock.removeEventListener('pointerdown', onChipDown);
+    dock.removeEventListener('touchmove', onChipTouch);
+    dock.removeEventListener('click', swallowClick, true);
     finishRec();
     T.drums = T.click = false;
     audio.stop();

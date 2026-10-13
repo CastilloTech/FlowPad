@@ -530,6 +530,7 @@ function editorAudio(ed) {
   };
 
   // ----- Takes panel + recorder -----
+  let hearingAll = null; // the play-through "Hear all bars" started, until it stops
   let recOn = false, autoDrums = false, takes = [], playingId = null, hearing = false, counting = false;
   const wantWords = () => S.settings.recWords !== false && voice.supported();
 
@@ -1104,6 +1105,28 @@ function editorAudio(ed) {
   }
 
   /**
+   * Hear all bars: the song once through from `from` (a bar number, 0 = bar 1) over its beat, every
+   * bar's words as blips, the playhead following. Play in the dock stops it.
+   */
+  function hearSong(from = 0) {
+    const seq = barLines(f);
+    if (!seq.length) return;
+    stopPlayer();
+    T.click = false; T.drums = true; autoDrums = false;
+    firstBar = from;
+    const cfg = transportCfg(true, { from }), me = {};
+    hearingAll = me;
+    E.spb = cfg.stepsPerBeat;
+    audio.play({
+      ...cfg, bars: seq.length, loop: false,
+      click: !cfg.getBar, // an imported beat with the drums off: a click keeps the time
+      words: (b, t, barDur) => blipsFor(seq[b % seq.length], t, barDur),
+      onStop: () => { clearNow(); if (hearingAll === me) { hearingAll = null; T.drums = false; updateTransportUI(); } },
+    });
+    updateTransportUI();
+  }
+
+  /**
    * Tap a cadence in: a bar of clicks counts you in, then you tap a bar of rhythm over the beat.
    * The taps (minus your headphone delay) snap to the bar's grid; lay its words on it, use it as
    * a guide to write into, or save it as a cadence.
@@ -1179,6 +1202,7 @@ function editorAudio(ed) {
     sh.onclose = () => { if (running) { running = false; audio.stop(); } };
   }
   function startTransport(countIn = 0) {
+    hearingAll = null;
     // from the timeline's choice: where to start, and a stretch to go round (not while recording)
     const tk = trackReady(), from = tk && sel ? sel.from : 0;
     const loop = tk && sel && sel.to != null && looping && !recOn ? { from: sel.from, to: sel.to } : null;
@@ -1232,5 +1256,5 @@ function editorAudio(ed) {
     syncTransport(true);
   };
 
-  return { PBeat, PTakes, syncTransport, updateTransportUI, stopPlayer, finishRec, loadTrack, hearBar, tapCadence, hitsFor };
+  return { PBeat, PTakes, syncTransport, updateTransportUI, stopPlayer, finishRec, loadTrack, hearBar, hearSong, tapCadence, hitsFor };
 }

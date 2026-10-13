@@ -590,6 +590,7 @@ function fileMenu(f, inEditor) {
         toast('Duplicated');
         if (!inEditor) rerender();
       } },
+      ...(inEditor && E ? [{ label: 'Hear all bars', icon: 'play', hint: 'Every bar’s words as blips, over the beat', onClick: () => E.hearSong(0) }] : []),
       { label: 'Versions…', icon: 'loop', hint: 'Look back, restore', onClick: () => versionsSheet(f) },
       { label: 'Share & export…', icon: 'share', hint: 'Copy, PDF, .txt', onClick: () => shareMenu(f) },
       {

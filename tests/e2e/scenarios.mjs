@@ -550,6 +550,96 @@ export default [
   },
 
   {
+    name: 'rhymes: drag one from the strip onto a step, shifting or replacing; hold one in the panel to pin it',
+    async run() {
+      const { sleep, bars, steps, cell, type, drag } = E2E;
+      document.querySelector('.row').click(); await sleep(500);
+      document.querySelector('[data-a="add-bar"]').click(); await sleep(150);
+      await type('I take the money');
+      document.querySelector('#cin').blur(); await sleep(200);
+      const n = bars().length - 1, B = () => bars()[n];
+      const chip = (w) => { const c = document.createElement('button'); c.className = 'chip sm'; c.dataset.a = 'ins'; c.dataset.w = w; c.textContent = w; document.querySelector('#strip').appendChild(c); return c; };
+      const out = { before: steps(B()) };
+      // onto a rest: it lands there
+      cell(B(), 0).scrollIntoView({ block: 'center' }); await sleep(100);
+      await drag(chip('bake'), cell(B(), 12));
+      out.rest = steps(B());
+      // onto words: they shift along
+      await sleep(500); // the strip redraws after a drop
+      await drag(chip('make'), cell(B(), 1), { during: async () => { await sleep(80); out.badge = document.querySelector('.drag-ghost .gb')?.textContent; } });
+      out.shift = steps(B());
+      // pause on a word: it's replaced
+      await sleep(500);
+      await drag(chip('shake'), cell(B(), 1), { pause: 900 });
+      out.replace = steps(B());
+      out.toast = document.querySelector('#toast').textContent;
+      // let go off the sheet: nothing changes
+      await sleep(500);
+      await drag(chip('lake'), document.querySelector('#stat'));
+      out.cancel = steps(B());
+      // the Rhymes panel: hold a word until it lifts, let go there — pinned to the bank
+      document.querySelector('[data-a="rhymes-open"]')?.click(); await sleep(300);
+      if (!document.querySelector('#rres')) { E2E.dock(/Rhymes/).click(); await sleep(300); }
+      const rq = document.querySelector('#rq'); rq.value = 'take'; rq.dispatchEvent(new Event('input', { bubbles: true })); await sleep(400);
+      for (let i = 0; i < 60 && !document.querySelector('#rres [data-w]'); i++) await sleep(100);
+      const c = document.querySelector('#rres [data-w]'), p = E2E.mid(c);
+      out.word = c.dataset.w;
+      E2E.pointer('pointerdown', c, p, 'touch'); await sleep(400);
+      out.lifted = !!document.querySelector('.drag-ghost');
+      E2E.pointer('pointerup', c, p, 'touch'); c.click(); await sleep(300);
+      out.pinned = !!document.querySelector(`#rres [data-w="${out.word}"].pinned`);
+      out.notInserted = steps(B()) === out.cancel;
+      return out;
+    },
+    check(r, assert) {
+      assert.equal(r.before, 'I take the mo- ney · · · · · · · · · · ·');
+      assert.equal(r.rest, 'I take the mo- ney · · · · · · · bake · · ·');
+      assert.equal(r.badge, 'Shift');
+      assert.equal(r.shift, 'I make take the mo- ney · · · · · · bake · · ·');
+      assert.equal(r.replace, 'I shake take the mo- ney · · · · · · bake · · ·');
+      assert.equal(r.toast, 'Swapped “make” for “shake”Undo');
+      assert.equal(r.cancel, r.replace);
+      assert.ok(r.lifted, `${r.word} lifts when held`);
+      assert.ok(r.pinned && r.notInserted, 'held and let go: pinned, not dropped in');
+    },
+  },
+
+  {
+    name: 'hear all bars: the whole song as blips over the beat, playhead moving, Play stops it',
+    audio: true,
+    async run() {
+      const { sleep, bars, menu } = E2E;
+      if (!(await E2E.audioRuns())) return { skipped: 'audio clock does not run here' };
+      document.querySelector('.row').click(); await sleep(600);
+      document.querySelector('[data-a="fmenu"]').click(); await sleep(300);
+      menu(/Hear all bars/).click(); await sleep(400);
+      const out = { state: FP.audio.state(), button: document.querySelector('#dplay .dk-l').textContent };
+      const n = bars().length, blips = () => FP.audio.timeline().log.filter((e) => e.blip).length;
+      out.first = !!bars()[0].querySelector('.cell.now');
+      out.bars = n;
+      // a bar later, the playhead is on bar 2
+      await sleep((240 / 90) * 1000 + 300);
+      out.second = !!bars()[1].querySelector('.cell.now');
+      document.querySelector('#dplay').click(); await sleep(300);
+      out.stopped = FP.audio.state();
+      out.after = document.querySelector('#dplay .dk-l').textContent;
+      // and from a bar's menu too
+      bars()[2].querySelector('[data-a="bar-menu"]').click(); await sleep(300);
+      out.inBarMenu = !!menu(/Hear all bars/);
+      document.querySelector('.sheet-wrap')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      return out;
+    },
+    check(r, assert) {
+      assert.deepEqual(r.state, { playing: true, kind: 'song' });
+      assert.equal(r.button, 'Stop');
+      assert.ok(r.first && r.second, 'the playhead moves bar to bar');
+      assert.equal(r.stopped.playing, false);
+      assert.equal(r.after, 'Play');
+      assert.ok(r.inBarMenu);
+    },
+  },
+
+  {
     name: 'gestures: swipe a bar to delete / duplicate, swipe sheets and panels closed',
     async run() {
       const { sleep, bars, steps, swipe } = E2E;
@@ -664,7 +754,7 @@ export default [
       assert.equal(r.applied, 'Late · · · night, · · · pen · · · tight, city lights glow · · ·');
       assert.match(r.toast, /“On the beat” appliedUndo/);
       assert.ok(r.undone.startsWith('Late'), r.undone);
-      assert.deepEqual(r.barMenu, ['Rhythm…', 'Hear this bar', 'Insert bar above', 'Insert bar below', 'Clear bar', 'Delete bar']);
+      assert.deepEqual(r.barMenu, ['Rhythm…', 'Hear this bar', 'Hear all bars', 'Insert bar above', 'Insert bar below', 'Clear bar', 'Delete bar']);
       assert.deepEqual(r.flows.slice(0, 3), ['Spread evenly', 'One syllable per step', 'My flow']);
       assert.ok(r.flows.includes('Straight 8ths'));
     },
@@ -761,7 +851,7 @@ export default [
       assert.equal(r.takesEmpty, 'No takes yet');
       assert.ok(r.noSwitchesInPanel);
       assert.deepEqual(r.options.slice(0, 2), ['Start the beat when I record', 'Count in']);
-      assert.deepEqual(r.songMenu, ['Rename', 'Move to…', 'Duplicate', 'Versions…', 'Share & export…', 'Delete song']);
+      assert.deepEqual(r.songMenu, ['Rename', 'Move to…', 'Duplicate', 'Hear all bars', 'Versions…', 'Share & export…', 'Delete song']);
       assert.deepEqual(r.sections, ['General', 'Writing', 'Sound & timing', 'Your data', 'About']);
     },
   },
