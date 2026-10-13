@@ -202,11 +202,21 @@ function Editor(id) {
     flush();
     return out;
   }
-  /** A bar's lyric: stress per syllable, rhyme-family underlines, and rhyme-chain highlights (mk). */
-  function lineHTML(l, color, mk) {
-    let c = 0;
-    return syl.analyzeLine(l).tokens.map((t) => {
-      if (!t.word) return esc(t.text);
+  /**
+   * A bar's lyric: stress per syllable, rhyme-family underlines, rhyme-chain highlights (mk), and a
+   * faint dot for every rest step — before each word and after the last (v: the bar's barView).
+   */
+  function lineHTML(l, color, mk, v) {
+    let c = 0, wi = 0, fresh = true;
+    const dots = (n, end) => (n > 0 ? `<span class="rs${end ? ' end' : ''}" aria-hidden="true">${'·'.repeat(n)}</span>` : '');
+    const html = syl.analyzeLine(l).tokens.map((t) => {
+      if (!t.word) { if (/\s/.test(t.text)) fresh = true; return esc(t.text); }
+      const rest = v && fresh ? dots(v.rests[wi++] || 0) : '';
+      fresh = false;
+      return rest + wordHTML(t);
+    }).join('');
+    return html + (v ? dots(v.tail, true) : '');
+    function wordHTML(t) {
       if (t.syls[0] && t.syls[0].num) return `<span class="s1">${esc(t.text)}</span>`;
       const k = rhymeWord(t.text) ? syl.rhymeKey(t.text) : '';
       const r = k && color[k] != null ? ` data-r="${color[k]}"` : '';
@@ -214,7 +224,7 @@ function Editor(id) {
         const m = mk ? mk[c++] : -1;
         return `<span class="s${s.s}${m >= 0 ? ' mc' : ''}"${m >= 0 ? ` data-c="${m % 6}"` : ''}>${esc(s.t)}</span>`;
       }).join('')}</span>`;
-    }).join('');
+    }
   }
 
   /** Rhyme chains per section (bars between labels and blank lines): row → chain per syllable. */
@@ -327,7 +337,7 @@ function Editor(id) {
       kind: 'bar',
       N,
       head: `<span class="bar-n">${n}</span>${pat}<span class="grow"></span>${bx}<span class="cnt${miss ? (off > 0 ? ' hi' : ' lo') : ''}"${miss ? ` title="${off > 0 ? off + ' over' : -off + ' under'} the ${f.target}-syllable target"` : ''}>${cnt} syl${miss ? ` <b>${off > 0 ? '+' : '−'}${Math.abs(off)}</b>` : ''}</span><button class="icon-btn bm" data-a="bar-menu" data-n="${n}" aria-label="Bar ${n} options">${icon('more')}</button>`,
-      line: v.text ? lineHTML(v.text, color, mk) : '<span class="ph-t2">Tap a step to write</span>',
+      line: v.text ? lineHTML(v.text, color, mk, v) : '<span class="ph-t2">Tap a step to write</span>',
       grid: range(N).map((k) => {
         const raw = (row.cells[k] || '').trim();
         const cont = /\S-$/.test(raw), shown0 = cont ? raw.slice(0, -1) : raw;
@@ -1217,7 +1227,18 @@ function Editor(id) {
       { name: 'Spread evenly', mode: 'even', note: 'Across the whole bar' },
       { name: 'One syllable per step', mode: 'pack', note: 'Fast, from the first step' },
     ];
-    const all = [...SPREAD, ...S.flows, ...FLOWS];
+    // an imported beat: rhythms from its own drums in this bar (and, over a section, in each bar)
+    const ord = (i) => rows.slice(0, i + 1).filter((x) => x.type === 'bar').length - 1;
+    const beatSteps = (i, pick) => { const h = hitsFor(ord(i)); return h ? range(16).filter((x) => pick.some((t) => h[t][x])) : []; };
+    const seen = new Set();
+    const BEAT = !f.track ? [] : [
+      { name: 'On the kicks', pick: ['kick'] },
+      { name: 'On the snares', pick: ['snare'] },
+      { name: 'Kicks and snares', pick: ['kick', 'snare'] },
+      { name: 'On the hats', pick: ['hat'] },
+    ].map((x) => ({ ...x, steps: beatSteps(r, x.pick), n: 16, note: 'Your beat’s drums in this bar' }))
+      .filter((x) => x.steps.length >= 2 && !seen.has(x.steps.join()) && seen.add(x.steps.join()));
+    const all = [...SPREAD, ...BEAT, ...S.flows, ...FLOWS];
     const R = rows[r], N = R.cells.length, has = SH.flowOf(R.cells).length > 0;
     const sh = sheet({
       title: 'Rhythm',
@@ -1225,7 +1246,7 @@ function Editor(id) {
         <label class="set-row"><div><div class="lbl">Whole section</div><div class="sub">Every bar until the next blank line or label</div></div><input type="checkbox" class="switch" id="fwhole"></label>
         <button class="btn block ftap" data-a="ftap">${icon('drum', 'sm')}Tap a cadence in</button>
         ${R.guide ? `<button class="btn block" data-a="fguide">${icon('x', 'sm')}Clear this bar’s guide</button>` : ''}
-        ${all.map((fl, i) => `<div class="flow-i"><button class="menu-i" data-fi="${i}">${fl.mode ? `${icon(fl.mode === 'even' ? 'flow' : 'drum')}<span>${esc(fl.name)}</span>` : `${flowDots(fl.steps, fl.n)}<span>${esc(fl.name)}</span>`}${fl.note ? `<small>${esc(fl.note)}</small>` : ''}</button>${fl.steps ? `<button class="icon-btn muted" data-fplay="${i}" aria-label="Hear ${esc(fl.name)}">${icon('play', 'sm')}</button>` : ''}${fl.user ? `<button class="icon-btn muted" data-fdel="${i}" aria-label="Delete ${esc(fl.name)}">${icon('x')}</button>` : ''}</div>`).join('')}
+        ${all.map((fl, i) => `${BEAT.length && i === SPREAD.length ? '<div class="sec-h">From your beat’s drums</div>' : ''}${BEAT.length && i === SPREAD.length + BEAT.length ? '<div class="sec-h">Cadences</div>' : ''}<div class="flow-i"><button class="menu-i" data-fi="${i}">${fl.mode ? `${icon(fl.mode === 'even' ? 'flow' : 'drum')}<span>${esc(fl.name)}</span>` : `${flowDots(fl.steps, fl.n)}<span>${esc(fl.name)}</span>`}${fl.note ? `<small>${esc(fl.note)}</small>` : ''}</button>${fl.steps ? `<button class="icon-btn muted" data-fplay="${i}" aria-label="Hear ${esc(fl.name)}">${icon('play', 'sm')}</button>` : ''}${fl.user ? `<button class="icon-btn muted" data-fdel="${i}" aria-label="Delete ${esc(fl.name)}">${icon('x')}</button>` : ''}</div>`).join('')}
         ${has ? `<button class="btn block fsave" data-a="fsave">${icon('bank', 'sm')}Save this bar’s rhythm</button>` : ''}`,
       actions: {
         fsave: () => { sh.close(); saveFlow(r); },
@@ -1266,7 +1287,9 @@ function Editor(id) {
       if (z > a) snapshot(f, 'Before a flow over a section');
       for (let i = a; i <= z; i++) {
         const text = barView(rows[i].cells).text;
-        if (text) rows[i].cells = fl.mode ? spreadCells(text, fl.mode, rows[i].cells.length) : SH.applyFlow(text, fl.steps, fl.n || 16);
+        // the beat's drums: each bar on its own bar of the beat
+        const steps = fl.pick ? (i === r ? fl.steps : beatSteps(i, fl.pick)) : fl.steps;
+        if (text && (fl.mode || steps.length)) rows[i].cells = fl.mode ? spreadCells(text, fl.mode, rows[i].cells.length) : SH.applyFlow(text, steps, fl.n || 16);
       }
       sh.close();
       commit();

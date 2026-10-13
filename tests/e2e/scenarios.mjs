@@ -344,7 +344,7 @@ export default [
       document.querySelector('.sheet [data-a="go"]').click(); await sleep(600);
       out.labels = [...document.querySelectorAll('.blk.label')].map((l) => l.textContent).join(' | ');
       out.bars = E2E.bars().length;
-      out.firstLyric = E2E.bars()[0].querySelector('.bline').textContent.slice(0, 15);
+      out.firstLyric = E2E.bars()[0].querySelector('.bline').textContent.replace(/·/g, '').slice(0, 15); // without the rest dots
       document.querySelector('#bundo').click(); await sleep(300);
       out.undoBars = E2E.bars().length;
       return out;
@@ -432,6 +432,94 @@ export default [
       assert.equal(r.saved, 1);
       assert.equal(r.pattern.kick, '1000000010000000');
       assert.equal(r.pattern.snare, '0000100000001000');
+    },
+  },
+
+  {
+    name: 'beat zoom and drum rhythms: rests dotted in the line, zoom the timeline, words onto the beat’s kicks',
+    audio: true,
+    async run() {
+      const { sleep, bars, steps, type, menu } = E2E;
+      if (!(await E2E.audioRuns())) return { skipped: 'audio clock does not run here' };
+      document.querySelector('.row').click(); await sleep(500);
+      const out = {};
+      // rests: a dot for each empty step in the line above the grid
+      document.querySelector('[data-a="add-bar"]').click(); await sleep(150);
+      await type('one');
+      const last = bars()[bars().length - 1];
+      E2E.cell(last, 2).click(); await sleep(100);
+      await type('two');
+      document.querySelector('#cin').blur(); await sleep(400);
+      out.grid = steps(last);
+      out.line = last.querySelector('.bline').textContent;
+      // a 24-bar beat at 120: kicks on 1 and 3, hats on the 8ths, a snare in bars 9–16
+      const bar = 2, rate = 22050, off = new OfflineAudioContext(1, Math.ceil(24 * bar * rate), rate);
+      const hit = (type, freq, t, len, gain, f2) => { const o = off.createOscillator(), g = off.createGain(); o.type = type; o.frequency.setValueAtTime(freq, t); if (f2) o.frequency.exponentialRampToValueAtTime(f2, t + 0.12); g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0005, t + len); o.connect(g).connect(off.destination); o.start(t); o.stop(t + len + 0.02); };
+      for (let b = 0; b < 24; b++) {
+        const t = b * bar;
+        for (const q of [0, 2]) hit('sine', 110, t + q * bar / 4, 0.3, 0.8, 45);
+        for (let e = 0; e < 8; e++) hit('square', 7000, t + (e * bar) / 8, 0.03, 0.05);
+        if (b >= 8 && b < 16) for (const q of [1, 3]) { hit('triangle', 210, t + (q * bar) / 4, 0.15, 0.35); hit('sawtooth', 1800, t + (q * bar) / 4, 0.1, 0.25); }
+      }
+      const wav = E2E.wav((await off.startRendering()).getChannelData(0), rate);
+      E2E.dock(/Beat/).click(); await sleep(300);
+      E2E.choose(document.querySelector('#tfile'), new File([wav], 'Zoom 120bpm.wav', { type: 'audio/wav' })); await sleep(2000);
+      document.querySelector('.beatform').requestSubmit(); await sleep(400);
+      for (let i = 0; i < 80 && !document.querySelector('#panel .tl-wave i'); i++) await sleep(100);
+      const sc = () => document.querySelector('#tlsc'), inn = () => document.querySelector('#tlin');
+      const ratio = () => Math.round(inn().offsetWidth / sc().clientWidth * 10) / 10;
+      out.z1 = { ratio: ratio(), label: document.querySelector('#tlzv').textContent, outOff: document.querySelector('#tlzout').disabled };
+      // the + button: twice as wide, half the beat in view
+      document.querySelector('#tlzin').click(); await sleep(150);
+      out.z2 = { ratio: ratio(), label: document.querySelector('#tlzv').textContent, ticks: document.querySelectorAll('#tlticks span').length };
+      // drag across bars 9–10 while zoomed
+      { const w = document.querySelector('#tlw'), r = w.getBoundingClientRect(), x = (b) => r.left + ((b + 0.5) / 24) * r.width;
+        const ev = (type, b) => w.dispatchEvent(new PointerEvent(type, { bubbles: true, clientX: x(b), clientY: r.top + 10, pointerId: 1 }));
+        ev('pointerdown', 8); ev('pointermove', 8.6); ev('pointermove', 9); ev('pointerup', 9); await sleep(150); }
+      out.zoomedSel = document.querySelector('#tlcap').textContent;
+      // pinch out with two fingers
+      { const r = sc().getBoundingClientRect(), y = r.top + 60, m = r.left + r.width / 2;
+        const pe = (type, id, x) => document.querySelector('#tlw').dispatchEvent(new PointerEvent(type, { bubbles: true, clientX: x, clientY: y, pointerId: id, pointerType: 'touch' }));
+        pe('pointerdown', 11, m - 40); pe('pointerdown', 12, m + 40);
+        pe('pointermove', 11, m - 80); pe('pointermove', 12, m + 80);
+        pe('pointerup', 11, m - 80); pe('pointerup', 12, m + 80); await sleep(150); }
+      out.pinched = ratio();
+      out.selAfterPinch = document.querySelector('#tlcap').textContent;
+      // all the way in: 4 bars across, + off; Ctrl+wheel back out to the whole beat
+      for (let i = 0; i < 4; i++) { document.querySelector('#tlzin').click(); await sleep(60); }
+      out.max = { ratio: ratio(), inOff: document.querySelector('#tlzin').disabled };
+      for (let i = 0; i < 6; i++) { sc().dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, ctrlKey: true, deltaY: 100, clientX: sc().getBoundingClientRect().left + 20 })); await sleep(30); }
+      out.back = ratio();
+      // the zoom stays when the panel redraws
+      document.querySelector('#tlzin').click(); await sleep(100);
+      document.querySelector('[data-a="tlmark"]').click(); await sleep(300);
+      out.kept = ratio();
+      document.querySelector('[data-a="pclose"]').click(); await sleep(300);
+      // bar 1's Rhythm: rhythms from the beat's drums in that bar
+      bars()[0].querySelector('[data-a="bar-menu"]').click(); await sleep(300);
+      menu(/Rhythm/).click(); await sleep(300);
+      out.heads = [...document.querySelectorAll('.sheet .sec-h')].map((h) => h.textContent);
+      out.beatFlows = [...document.querySelectorAll('.sheet .flow-i .menu-i span')].map((x) => x.textContent).filter((t) => /^On the|^Kicks and/.test(t));
+      [...document.querySelectorAll('.sheet .flow-i .menu-i')].find((b) => /On the kicks/.test(b.textContent)).click(); await sleep(400);
+      out.onKicks = [...bars()[0].querySelectorAll('.ct')].map((c, k) => (c.textContent.trim() ? k : -1)).filter((k) => k >= 0);
+      return out;
+    },
+    check(r, assert) {
+      assert.equal(r.grid, 'one · two · · · · · · · · · · · · ·');
+      assert.equal(r.line, 'one ·two·············', 'a dot per rest: one before “two”, 13 after it');
+      assert.deepEqual(r.z1, { ratio: 1, label: 'Whole beat · pinch to zoom', outOff: true });
+      assert.equal(r.z2.ratio, 2);
+      assert.equal(r.z2.label, 'Bars 7–18 of 24', 'zoomed in on the middle');
+      assert.ok(r.z2.ticks >= 12, `bar numbers more often zoomed in: ${r.z2.ticks}`);
+      assert.match(r.zoomedSel, /bars 9–10$/);
+      assert.ok(r.pinched > 3 && r.pinched < 4.5, `pinching out to twice the spread zooms ×2: ${r.pinched}`);
+      assert.equal(r.selAfterPinch, r.zoomedSel, 'a pinch doesn’t choose bars');
+      assert.deepEqual(r.max, { ratio: 6, inOff: true });
+      assert.equal(r.back, 1);
+      assert.equal(r.kept, 2);
+      assert.deepEqual(r.heads, ['From your beat’s drums', 'Cadences']);
+      assert.ok(r.beatFlows.includes('On the kicks'), r.beatFlows.join());
+      assert.deepEqual(r.onKicks, [0, 8], 'the words land on the beat’s kicks');
     },
   },
 

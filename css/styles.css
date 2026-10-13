@@ -474,6 +474,9 @@ a.menu-i { color: var(--text); text-decoration: none; }
 .bh .bm { width: 32px; height: 30px; margin-right: -8px; color: var(--faint); }
 .bline { font: 400 17px/1.5 var(--font); min-height: 26px; padding: 0 0 2px; cursor: text; }
 .bline .ph-t2 { color: var(--faint); font-size: 14px; }
+/* rests: a faint dot per empty step, where they fall in the line */
+.bline .rs { color: var(--faint); font-weight: 700; letter-spacing: 0.14em; margin-right: 0.2em; }
+.bline .rs.end { margin: 0 0 0 0.1em; }
 .bline .s0 { color: var(--muted); }
 .bline .s1 { color: var(--accent); text-shadow: 0 0 0.6px currentColor; text-transform: uppercase; }
 .bline .s2 { color: var(--text); }
@@ -679,6 +682,19 @@ a.menu-i { color: var(--text); text-decoration: none; }
 .tl-tip { text-align: left; margin: -4px 0 12px; }
 .tl-head { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--text); pointer-events: none; }
 .tl-ticks { position: relative; height: 14px; }
+/* zoom: the timeline scrolls sideways inside its box */
+.tl-scroll { overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; overscroll-behavior-x: contain; touch-action: pan-x pan-y; }
+.tl-in { min-width: 100%; }
+/* the lanes line up with the outline above; their letters float over the first bar */
+.tl-lane { gap: 0; }
+.tl-lane .tl { position: sticky; left: 0; z-index: 1; width: 0; overflow: visible; color: var(--muted); text-shadow: 0 0 3px var(--bg), 0 0 3px var(--bg); }
+.tl-zoom { display: flex; align-items: center; justify-content: flex-end; gap: 2px; margin: -2px 0 2px; }
+.tl-zv { flex: 1; font-size: 11px; font-weight: 500; color: var(--faint); text-transform: none; letter-spacing: 0; }
+/* zoomed in: a section's name stays in view while it's on screen */
+.tl-in .sseg { overflow: visible; }
+.tl-in .sseg b, .tl-in .sseg span { position: sticky; left: 8px; }
+.tl-zoom .icon-btn { width: 30px; height: 30px; }
+.tl-zoom .icon-btn:disabled { opacity: 0.35; }
 .tl-ticks span { position: absolute; top: 1px; transform: translateX(-1px); font: 600 10px var(--mono); color: var(--faint); }
 .tl-bar { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; }
 .tl-cap { font-size: 12px; color: var(--muted); min-width: 0; }

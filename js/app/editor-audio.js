@@ -48,6 +48,16 @@ function editorAudio(ed) {
   // Play it and tap Mark where it changes, or drag across bars and name them. Its outline, a line
   // every 4 bars and lanes showing where the kick, snare and hats play help you see the changes.
   let sel = null, looping = false, firstBar = 0, headBar = -1; // sel: { from, to } in the beat's bars (to: null = just where to start)
+  // zoom: how many times wider than the panel the timeline is (pinch, Ctrl+wheel or − / +), and where it's scrolled to
+  let tlZoom = 1, tlScroll = 0;
+  const maxZoom = (tk) => Math.max(1, tk.rec.bars / 4); // in close: 4 bars across
+  /** Bar numbers along the bottom, as often as there's room for at this zoom. */
+  function ticksHTML(N) {
+    const step = [1, 2, 4, 8, 16, 32].find((s) => N / tlZoom / s <= 8) || 64;
+    const out = [];
+    for (let b = 0; b < N; b += step) out.push(`<span style="left:${(b / N) * 100}%">${b + 1}</span>`);
+    return out.join('');
+  }
   const NAMES = ['Intro', 'Verse', 'Hook', 'Bridge', 'Break', 'Outro'];
   /** The beat cut into its marked sections, covering it end to end: [{ name ('' = not named yet), from, to }]. */
   function partsOf(tk) {
@@ -73,35 +83,91 @@ function editorAudio(ed) {
 
   function timelineHTML(tk) {
     const N = tk.rec.bars, wave = tk.rec.wave, parts = partsOf(tk), hits = tk.rec.hits;
-    const ticks = [], grid = [];
-    for (let b = 0; b < N; b += N > 48 ? 16 : 8) ticks.push(`<span style="left:${(b / N) * 100}%">${b + 1}</span>`);
+    const grid = [];
+    tlZoom = Math.min(tlZoom, maxZoom(tk));
     for (let b = 4; b < N; b += 4) grid.push(`<b class="g${b % 16 === 0 ? ' g16' : b % 8 === 0 ? ' g8' : ''}" style="left:${(b / N) * 100}%"></b>`);
     // where each drum plays: one cell a bar, stronger the more it hits
     const lane = (k, full) => hits ? `<div class="tl-lane" data-k="${k}"><span class="tl">${{ kick: 'K', snare: 'S', hat: 'H' }[k]}</span><div>${range(N).map((b) => { const n = [...((hits[b] || {})[k] || '')].filter((c) => c === '1').length; return `<i style="opacity:${n ? Math.min(1, 0.25 + (0.75 * n) / full) : 0}"></i>`; }).join('')}</div></div>` : '';
-    return `<div class="tl" id="tl">
+    return `<div class="tl" id="tl"><div class="tl-scroll" id="tlsc"><div class="tl-in" id="tlin" style="width:${tlZoom * 100}%">
       <div class="struct" id="struct" role="group" aria-label="The beat's sections">${parts.map((x, i) => `<button class="sseg${x.name ? '' : ' blank'}" data-a="tlsec" data-i="${i}" data-kind="${secKind(x.name)}" style="flex:${x.to - x.from}" title="${esc(partLabel(x))} · ${plural(x.to - x.from, 'bar')}"><b>${esc(x.name || '—')}</b><span>${x.to - x.from}</span></button>`).join('')}</div>
       <div class="tl-wave" id="tlw" aria-label="The beat, bar by bar: tap to start there, drag across bars to choose them">${wave ? wave.slice(0, N * 4).map((v) => `<i style="height:${Math.round(10 + v * 90)}%"></i>`).join('') : '<span class="tl-wait">Reading the beat…</span>'}${grid.join('')}<div class="tl-sel" id="tlsel" hidden></div><div class="tl-head" id="tlhead" hidden></div></div>
       ${lane('kick', 4)}${lane('snare', 2)}${lane('hat', 8)}
-      <div class="tl-ticks">${ticks.join('')}</div>
+      <div class="tl-ticks" id="tlticks">${ticksHTML(N)}</div>
+    </div></div>
+      <div class="tl-zoom"><span class="tl-zv" id="tlzv"></span><button class="icon-btn muted" data-a="tlzoom" data-z="0.5" id="tlzout" aria-label="Zoom out">${icon('minus', 'sm')}</button><button class="icon-btn muted" data-a="tlzoom" data-z="2" id="tlzin" aria-label="Zoom in">${icon('plus', 'sm')}</button></div>
     </div>
     <div class="tl-bar"><span class="tl-cap" id="tlcap"></span><span class="grow"></span><button class="icon-btn muted" data-a="tlclear" id="tlclear" aria-label="Clear the choice" hidden>${icon('x')}</button><button class="chip sm" data-a="tlmark" id="tlmark" title="Cut a section where the beat changes">${icon('plus', 'sm')}Mark</button><button class="chip sm" data-a="tlloop" id="tlloop" aria-pressed="false">${icon('loop', 'sm')}Loop</button><button class="chip sm on" data-a="tlplay" id="tlplay">${icon(T.drums ? 'stop' : 'play', 'sm')}${T.drums ? 'Stop' : 'Play'}</button></div>
     <div class="tl-name" id="tlname" hidden><span class="tl-q">Name it</span>${NAMES.map((n) => `<button class="chip sm" data-a="tlname" data-n="${n}">${n}</button>`).join('')}<button class="chip sm ghost" data-a="tlname" data-n="">Other…</button><button class="chip sm ghost" data-a="tlmerge" id="tlmerge">Join to the one before</button></div>
     ${parts.length === 1 && !parts[0].name ? '<p class="src tl-tip">Play it and tap <b>Mark</b> each time the beat changes — or drag across bars and name them. The outline and the drum lanes show where things drop in and out.</p>' : ''}`;
   }
-  /** Drag across the timeline to choose bars; tap it to choose where to start. */
+  /** Zoom the timeline to z (1 = the whole beat across), keeping the bar under clientX `at` (or the middle) where it is. */
+  function zoomTo(z, at) {
+    const tk = trackReady(), sc = $('#tlsc'), inn = $('#tlin');
+    if (!tk || !sc) return;
+    z = clamp(z, 1, maxZoom(tk));
+    const r = sc.getBoundingClientRect(), x = at == null ? r.width / 2 : clamp(at - r.left, 0, r.width);
+    const frac = (sc.scrollLeft + x) / inn.offsetWidth;
+    tlZoom = z;
+    inn.style.width = `${z * 100}%`;
+    sc.scrollLeft = frac * inn.offsetWidth - x;
+    $('#tlticks').innerHTML = ticksHTML(tk.rec.bars);
+    showZoom();
+  }
+  /** What's in view, and which zoom buttons apply. */
+  function showZoom() {
+    const tk = trackReady(), sc = $('#tlsc'), inn = $('#tlin'), zv = $('#tlzv');
+    if (!tk || !sc || !zv) return;
+    tlScroll = sc.scrollLeft;
+    const N = tk.rec.bars, a = Math.floor((sc.scrollLeft / inn.offsetWidth) * N), z = Math.min(N, Math.ceil(((sc.scrollLeft + sc.clientWidth) / inn.offsetWidth) * N - 0.01));
+    zv.textContent = tlZoom <= 1 ? 'Whole beat · pinch to zoom' : `Bars ${a + 1}–${z} of ${N}`;
+    $('#tlzout').disabled = tlZoom <= 1;
+    $('#tlzin').disabled = tlZoom >= maxZoom(tk);
+  }
+  VA.tlzoom = (el) => zoomTo(tlZoom * +el.dataset.z);
+  /** Drag across the timeline to choose bars; tap it to choose where to start; pinch to zoom. */
   function bindTimeline(tk) {
-    const w = $('#tlw');
+    const w = $('#tlw'), sc = $('#tlsc');
     if (!w) return;
-    const barAt = (x) => { const r = w.getBoundingClientRect(); return clamp(Math.floor(((x - r.left) / r.width) * tk.rec.bars), 0, tk.rec.bars - 1); };
+    sc.scrollLeft = tlScroll;
+    showZoom();
+    sc.addEventListener('scroll', showZoom, { passive: true });
     let down = null;
+    // two fingers: zoom around the point between them
+    const pts = new Map();
+    let pinch = null;
+    sc.addEventListener('pointerdown', (e) => {
+      if (e.pointerType !== 'touch') return;
+      pts.set(e.pointerId, e.clientX);
+      if (pts.size === 2) {
+        if (down && down.moved) setSel(down.before); // the first finger wasn't choosing bars after all
+        down = null;
+        const [a, b] = [...pts.values()];
+        pinch = { d: Math.max(20, Math.abs(a - b)), z: tlZoom };
+      }
+    });
+    sc.addEventListener('pointermove', (e) => {
+      if (!pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, e.clientX);
+      if (pinch && pts.size === 2) { const [a, b] = [...pts.values()]; zoomTo((pinch.z * Math.max(20, Math.abs(a - b))) / pinch.d, (a + b) / 2); }
+    });
+    ['pointerup', 'pointercancel'].forEach((t) => sc.addEventListener(t, (e) => { pts.delete(e.pointerId); if (pts.size < 2) pinch = null; }));
+    // a trackpad pinch, or Ctrl+wheel
+    sc.addEventListener('wheel', (e) => { if (!e.ctrlKey) return; e.preventDefault(); zoomTo(tlZoom * Math.exp(-e.deltaY * 0.01), e.clientX); }, { passive: false });
+    const barAt = (x) => { const r = w.getBoundingClientRect(); return clamp(Math.floor(((x - r.left) / r.width) * tk.rec.bars), 0, tk.rec.bars - 1); };
     w.addEventListener('pointerdown', (e) => {
-      down = { x: e.clientX, b: barAt(e.clientX), moved: false };
+      if (pts.size) return; // a second finger: a pinch
+      down = { x: e.clientX, b: barAt(e.clientX), moved: false, before: sel };
       try { w.setPointerCapture(e.pointerId); } catch (x) { /* keeps working without it */ }
     });
     w.addEventListener('pointermove', (e) => {
       if (!down) return;
       if (Math.abs(e.clientX - down.x) > 6) down.moved = true;
-      if (down.moved) { const b = barAt(e.clientX); setSel({ from: Math.min(down.b, b), to: Math.max(down.b, b) + 1 }); }
+      if (!down.moved) return;
+      // zoomed in: dragging to an edge scrolls on
+      const r = sc.getBoundingClientRect(), edge = e.clientX < r.left + 28 ? -1 : e.clientX > r.right - 28 ? 1 : 0;
+      if (edge && tlZoom > 1) sc.scrollLeft += edge * 12;
+      const b = barAt(e.clientX);
+      setSel({ from: Math.min(down.b, b), to: Math.max(down.b, b) + 1 });
     });
     w.addEventListener('pointerup', (e) => {
       if (!down) return;
@@ -200,7 +266,14 @@ function editorAudio(ed) {
     headBar = Math.round((b % tk.rec.bars) + k / 16) % tk.rec.bars; // a tap late in a bar means the next one
     if (!h) return;
     h.hidden = false;
-    h.style.left = `${(((b % tk.rec.bars) + k / 16) / tk.rec.bars) * 100}%`;
+    const at = ((b % tk.rec.bars) + k / 16) / tk.rec.bars;
+    h.style.left = `${at * 100}%`;
+    // zoomed in: the view turns the page when the playhead runs off it
+    const sc = $('#tlsc'), inn = $('#tlin');
+    if (sc && tlZoom > 1 && k === 0) {
+      const x = at * inn.offsetWidth;
+      if (x < sc.scrollLeft || x > sc.scrollLeft + sc.clientWidth - 8) sc.scrollLeft = x - sc.clientWidth * 0.1;
+    }
   }
 
   // ---------------- the beat's own drums: on the sheet, and as a pattern to keep ----------------

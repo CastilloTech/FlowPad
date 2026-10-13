@@ -119,7 +119,10 @@ const barLines = (f) => (f.sheet ? f.sheet.map((r, i) => (r.type === 'bar' ? i :
 const SH = FP.sheet;
 const { newBarRow, sylPieces, stepText, spreadCells, wordSteps } = SH;
 
-/** Read a bar's steps back into a lyric line, plus the stress class of every step (cached per bar content). */
+/**
+ * Read a bar's steps back into a lyric line, plus the stress class of every step and the rests:
+ * how many empty steps come before each word of the line, and after the last (cached per bar content).
+ */
 const views0 = new Map();
 window.addEventListener('fp:lexicon', () => views0.clear()); // new pronunciations change stresses
 function barView(cells) {
@@ -162,7 +165,9 @@ function barView0(cells) {
     return wt;
   }).join(' ');
   marks.forEach((m, k) => { cls[k] = m.has(1) ? 's1' : m.has(2) ? 's2' : m.size ? 's0' : ''; });
-  return { text, cls };
+  const rests = wordsIn.map((w, i) => Math.max(0, w.frags[0].k - (i ? wordsIn[i - 1].frags[wordsIn[i - 1].frags.length - 1].k : -1) - 1));
+  const last = wordsIn.length ? wordsIn[wordsIn.length - 1].frags.slice(-1)[0].k : cells.length - 1;
+  return { text, cls, rests, tail: cells.length - 1 - last };
 }
 
 function textToSheet(text, bars = {}) {
